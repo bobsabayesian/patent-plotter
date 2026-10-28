@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { handleApi } from '../worker/api';
 import { cleanCode, newCode, CODE_ALPHABET } from '../worker/sessions';
 import { normalizeNumber, parsePatentPage } from '../worker/patents';
+import { buildQuery, parseSearch } from '../worker/search.ts';
 import type { Store } from '../worker/store';
 
 const memory = () => {
@@ -20,8 +21,15 @@ describe('patent numbers', () => {
     expect(normalizeNumber('D654,321')).toBe('USD654321');
     expect(normalizeNumber('RE39,000')).toBe('USRE39000');
   });
+  it('accepts historic numbers: short ones and the pre-1836 X patents', () => {
+    expect(normalizeNumber('261')).toBe('US261');
+    expect(normalizeNumber('US261A')).toBe('US261A');
+    expect(normalizeNumber('416,697')).toBe('US416697');
+    expect(normalizeNumber('X8803')).toBe('USX8803');
+    expect(normalizeNumber('USX8803I1')).toBe('USX8803I1');
+  });
   it('rejects what is not a US patent number', () => {
-    for (const bad of ['', 'abc', '123', 'EP1234567', '../../etc', 'US7654321B2/../x']) expect(normalizeNumber(bad)).toBeNull();
+    for (const bad of ['', 'abc', 'EP1234567', '../../etc', 'US7654321B2/../x']) expect(normalizeNumber(bad)).toBeNull();
   });
 });
 
@@ -104,5 +112,39 @@ describe('patent api', () => {
     const ok = await handleApi(new Request(`http://x/api/img?u=${encodeURIComponent('https://patentimages.storage.googleapis.com/a/b.png')}`), store, doFetch);
     expect(ok!.status).toBe(200);
     expect(ok!.headers.get('content-type')).toBe('image/png');
+  });
+});
+
+describe('search', () => {
+  const q = (o: Record<string, string>) => buildQuery(new URLSearchParams(o), 2026);
+  it('builds the query Google takes, with dates as publication years', () => {
+    expect(q({ q: 'steam engine', from: '1850', to: '1899', sort: 'old', page: '2' })).toEqual({ inner: 'q=steam%20engine&country=US&type=PATENT&after=publication:18500101&before=publication:18991231&sort=old&page=2' });
+    expect(q({ q: 'a&b=c' })).toEqual({ inner: 'q=a%26b%3Dc&country=US&type=PATENT' }); // the text cannot add parameters of its own
+  });
+  it('rejects empty, long and out-of-range searches', () => {
+    for (const bad of <Record<string, string>[]>[{ q: '' }, { q: 'x'.repeat(201) }, { q: 'a', from: '1700' }, { q: 'a', to: '2027' }, { q: 'a', from: '1900', to: '1800' }, { q: 'a', from: 'abc' }, { q: 'a', page: '100' }, { q: 'a', page: '-1' }])
+      expect(q(bad)).toHaveProperty('error');
+  });
+  it('turns the feed into hits', () => {
+    const feed = { results: { total_num_results: 1010, total_num_pages: 101, cluster: [{ result: [
+      { patent: { title: ' <b>Bicycle</b>-step ', snippet: 'a &quot;step&quot; for <b>bicycles</b> &hellip;', grant_date: '1889-12-03', publication_number: 'US416541A', inventor: 'J. Smith', assignee: '', thumbnail: '79/78/16/x/US416541-drawings-page-1.png' } },
+      { patent: { title: '', publication_number: 'US2A' } },
+      { patent: {} },
+    ] }] } };
+    const r = parseSearch(feed, 0);
+    expect(r).toMatchObject({ total: 1010, pages: 100, page: 0 });
+    expect(r.hits).toHaveLength(2);
+    expect(r.hits[0]).toEqual({ id: 'US416541A', title: 'Bicycle -step', snippet: 'a "step" for bicycles …', date: '1889-12-03', inventor: 'J. Smith', assignee: '', thumb: 'https://patentimages.storage.googleapis.com/79/78/16/x/US416541-drawings-page-1.png' });
+    expect(r.hits[1]!.title).toBe('(untitled)');
+    expect(parseSearch({}, 3)).toEqual({ total: 0, pages: 1, page: 3, hits: [] });
+  });
+  it('asks Google once and passes errors on politely', async () => {
+    const { store } = memory();
+    let asked = '';
+    const ok = await handleApi(new Request('http://x/api/search?q=telephone&to=1900'), store, async (u) => { asked = u; return new Response(JSON.stringify({ results: { cluster: [{ result: [] }] } })); });
+    expect(ok!.status).toBe(200);
+    expect(decodeURIComponent(asked)).toContain('before=publication:19001231');
+    expect((await handleApi(new Request('http://x/api/search?q=a'), store, async () => new Response('', { status: 429 })))!.status).toBe(502);
+    expect((await handleApi(new Request('http://x/api/search'), store))!.status).toBe(400);
   });
 });

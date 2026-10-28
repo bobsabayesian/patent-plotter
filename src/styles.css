@@ -77,3 +77,13 @@ button.danger { color: var(--danger); }
   .stage { padding: 16px; }
   .page { height: auto; width: 100%; max-height: none; }
 }
+
+.or { margin: 12px 0 0; text-align: center; font-size: 11px; color: var(--muted); }
+.search input[type='number'] { width: 92px; }
+.hits { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; max-height: 340px; overflow-y: auto; }
+.hits button { width: 100%; display: flex; gap: 8px; text-align: left; align-items: flex-start; padding: 6px; }
+.hits img, .hits .noimg { width: 44px; height: 58px; flex: none; object-fit: contain; background: #fff; border: 1px solid var(--line); border-radius: 3px; }
+.hits .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hits strong { font-weight: 600; overflow-wrap: anywhere; }
+.hits small { color: var(--muted); overflow-wrap: anywhere; }
+.hits .snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

@@ -5,6 +5,7 @@ import { Preview } from './Preview';
 import { PEN_TYPES, penType, nearestTip } from './scene/pens';
 import { cleanCode } from './session';
 import { useStore } from './store';
+import type { SearchResult } from '../worker/search.ts';
 import { sceneToSvg } from './svg';
 import { useVectors } from './useVectors';
 
@@ -82,6 +83,8 @@ function PatentBox() {
   return (
     <section>
       <h2>Patent</h2>
+      <Search />
+      <p className="or">or load by number</p>
       <form className="row" onSubmit={(e) => { e.preventDefault(); if (num.trim()) void loadPatent(num); }}>
         <input value={num} onChange={(e) => setNum(e.target.value)} placeholder="US patent number, e.g. 7,654,321" aria-label="US patent number" spellCheck={false} />
         <button type="submit" disabled={!num.trim()}>Load</button>
@@ -264,5 +267,67 @@ function FigureFields({ el, err }: { el: FigureEl; err?: string }) {
       <p className="hint">Trim a sheet to show one figure, or to cut off the page header.</p>
       {err && <p className="err">{err}</p>}
     </>
+  );
+}
+
+function Search() {
+  const { loadPatent } = useStore();
+  const [q, setQ] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [sort, setSort] = useState('');
+  const [res, setRes] = useState<(SearchResult & { query: string }) | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async (page: number) => {
+    setBusy(true); setErr(null);
+    try {
+      const p = new URLSearchParams({ q, from, to, sort, page: String(page) });
+      const r = await fetch(`/api/search?${p}`);
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error ?? `search failed (${r.status})`);
+      const got = body as SearchResult;
+      setRes((old) => (page && old ? { ...got, hits: [...old.hits, ...got.hits], query: q } : { ...got, query: q }));
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="search">
+      <form className="row" onSubmit={(e) => { e.preventDefault(); if (q.trim()) void run(0); }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search patents, e.g. telephone, steam engine" aria-label="Search patents" />
+        <button type="submit" disabled={!q.trim() || busy}>{busy && !res ? 'Searching…' : 'Search'}</button>
+      </form>
+      <div className="row">
+        <input type="number" min={1790} max={new Date().getFullYear()} value={from} onChange={(e) => setFrom(e.target.value)} placeholder="From year" aria-label="From year" />
+        <input type="number" min={1790} max={new Date().getFullYear()} value={to} onChange={(e) => setTo(e.target.value)} placeholder="To year" aria-label="To year" />
+        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort order">
+          <option value="">Best match</option>
+          <option value="old">Oldest first</option>
+          <option value="new">Newest first</option>
+        </select>
+      </div>
+      {err && <p className="err">{err}</p>}
+      {res && (
+        <>
+          <p className="hint">{res.total.toLocaleString()} found for “{res.query}”{res.total > res.hits.length ? `, showing ${res.hits.length}` : ''}</p>
+          <ul className="hits">
+            {res.hits.map((h) => (
+              <li key={h.id}>
+                <button onClick={() => void loadPatent(h.id)} title={`Use ${h.id}`}>
+                  {h.thumb ? <img src={`/api/img?u=${encodeURIComponent(h.thumb)}`} alt="" loading="lazy" /> : <span className="noimg" />}
+                  <span className="txt">
+                    <strong>{h.title}</strong>
+                    <small>{[h.id, h.date, h.inventor || h.assignee].filter(Boolean).join(' · ')}</small>
+                    {h.snippet && <small className="snip">{h.snippet}</small>}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {res.page + 1 < res.pages && <button onClick={() => void run(res.page + 1)} disabled={busy}>{busy ? 'Loading…' : 'More results'}</button>}
+        </>
+      )}
+    </div>
   );
 }

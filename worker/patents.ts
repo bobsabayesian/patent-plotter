@@ -20,17 +20,20 @@ export interface PatentRecord {
 
 export const IMAGE_HOST = 'patentimages.storage.googleapis.com';
 
-/** "7,654,321", "US 7654321 B2", "us7654321b2" -> "US7654321B2" / "US7654321"; null if it is not a US patent number. */
+/**
+ * "7,654,321", "US 7654321 B2", "us7654321b2" -> "US7654321B2" / "US7654321"; null if it is not a US patent number.
+ * Historic ones are short ("US261A": the third patent of 1837) or start with X (the pre-1836 patents, "USX8803I1").
+ */
 export function normalizeNumber(raw: string): string | null {
   const s = raw.replace(/[\s,./-]+/g, '').toUpperCase();
-  const m = /^(?:US)?(\d{6,8}|D\d{5,7}|RE\d{4,6}|PP\d{4,6})([A-Z]\d?)?$/.exec(s);
+  const m = /^(?:US)?(X\d{1,6}|\d{1,8}|D\d{1,7}|RE\d{1,6}|PP\d{1,6}|H\d{1,5}|T\d{1,6})([A-Z]\d?)?$/.exec(s);
   return m ? `US${m[1]}${m[2] ?? ''}` : null;
 }
 
-const decode = (s: string) => s
+export const decode = (s: string) => s
   .replace(/<[^>]*>/g, ' ')
   .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
-  .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+  .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&hellip;/g, '…').replace(/&apos;/g, "'").replace(/&[mn]dash;/g, '–')
   .replace(/\s+/g, ' ').trim();
 
 const meta = (html: string, name: string, scheme?: string): string[] => {
@@ -93,8 +96,9 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
     const key = `${PREFIX}patents/${id}.json`;
     const hit = await store.get(key);
     if (hit) return new Response(hit.body, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=86400' } });
-    // Google wants the kind code for some, not others: try as given, then without
-    for (const tryId of new Set([id, id.replace(/[A-Z]\d?$/, '')])) {
+    // Google wants the kind code for some numbers and not others: as given, without it, then the usual ones
+    const bare = id.replace(/[A-Z]\d?$/, '');
+    for (const tryId of new Set([id, bare, `${bare}A`, `${bare}B2`, `${bare}B1`])) {
       const r = await doFetch(`https://patents.google.com/patent/${tryId}/en`, { headers: UA });
       if (!r.ok) continue;
       const rec = parsePatentPage(await r.text(), id);
