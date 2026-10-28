@@ -73,6 +73,21 @@ export function parsePatentPage(html: string, id: string): PatentRecord {
 const json = (status: number, body: unknown, cache = 'no-store') => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': cache } });
 
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Google Patents refuses Cloudflare's servers, so its URLs go through a relay on a home connection (relay/README.md).
+ * Without a relay (or for any other host) the request is made directly, which is what the dev server does.
+ */
+export function relayFetcher(relayUrl: string | undefined, key: string | undefined, direct: Fetcher = fetch): Fetcher {
+  if (!relayUrl || !key) return direct;
+  const base = relayUrl.replace(/\/+$/, '');
+  return (url, init) => (new URL(url).hostname === 'patents.google.com' ? direct(`${base}/fetch?u=${encodeURIComponent(url)}`, { headers: { 'x-relay-key': key } }) : direct(url, init));
+}
+
+/** Fetch, with a thrown network error turned into a 599 response, so a source that is down reads as "could not be reached". */
+export async function safeFetch(doFetch: Fetcher, url: string, init?: RequestInit): Promise<Response> {
+  try { return await doFetch(url, init); } catch { return new Response('', { status: 599 }); }
+}
 const UA = { 'user-agent': 'Mozilla/5.0 (compatible; patent-plotter)' };
 
 /** A short stable key for an image URL. */
@@ -100,7 +115,7 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
     const bare = id.replace(/[A-Z]\d?$/, '');
     let refused = 0;
     for (const tryId of new Set([id, bare, `${bare}A`, `${bare}B2`, `${bare}B1`])) {
-      const r = await doFetch(`https://patents.google.com/patent/${tryId}/en`, { headers: UA });
+      const r = await safeFetch(doFetch, `https://patents.google.com/patent/${tryId}/en`, { headers: UA });
       if (!r.ok) { if (r.status !== 404) refused = r.status; continue; }
       const rec = parsePatentPage(await r.text(), id);
       if (!rec.title && !rec.drawings.length) continue;
@@ -108,7 +123,7 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
       return json(200, rec, 'public, max-age=86400');
     }
     // a refusal is not "no such patent": say which, so a block does not look like a typo
-    if (refused) return json(502, { error: `Google Patents refused the request (${refused}), so ${id} could not be looked up` });
+    if (refused) return json(502, { error: refused === 599 ? `could not reach the patent source to look up ${id}` : `Google Patents refused the request (${refused}), so ${id} could not be looked up` });
     return json(404, { error: `no patent found for ${id}` });
   }
 
@@ -121,7 +136,7 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
     const hit = await store.get(key);
     const headers = { 'cache-control': 'public, max-age=604800' };
     if (hit) return new Response(hit.body, { headers: { ...headers, 'content-type': hit.type } });
-    const r = await doFetch(target.href, { headers: UA });
+    const r = await safeFetch(doFetch, target.href, { headers: UA });
     if (!r.ok) return json(502, { error: `image host said ${r.status}` });
     const type = r.headers.get('content-type') ?? 'image/png';
     if (!type.startsWith('image/')) return json(502, { error: 'not an image' });

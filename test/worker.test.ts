@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { handleApi } from '../worker/api';
 import { cleanCode, newCode, CODE_ALPHABET } from '../worker/sessions';
-import { normalizeNumber, parsePatentPage } from '../worker/patents';
+import { normalizeNumber, parsePatentPage, relayFetcher } from '../worker/patents.ts';
 import { buildQuery, parseSearch } from '../worker/search.ts';
 import type { Store } from '../worker/store';
 
@@ -152,5 +152,58 @@ describe('search', () => {
     expect(decodeURIComponent(asked)).toContain('before=publication:19001231');
     expect((await handleApi(new Request('http://x/api/search?q=a'), store, async () => new Response('', { status: 429 })))!.status).toBe(502);
     expect((await handleApi(new Request('http://x/api/search'), store))!.status).toBe(400);
+  });
+});
+
+describe('relay fetcher', () => {
+  const calls: { url: string; headers?: HeadersInit }[] = [];
+  const direct = async (url: string, init?: RequestInit) => { calls.push({ url, headers: init?.headers }); return new Response('ok'); };
+  it('sends Google Patents calls through the relay, with the key, and everything else straight out', async () => {
+    const f = relayFetcher('https://relay.example/', 'secret', direct);
+    await f('https://patents.google.com/patent/US261A/en', { headers: { 'user-agent': 'x' } });
+    await f('https://patentimages.storage.googleapis.com/a.png');
+    expect(calls[0]).toEqual({ url: 'https://relay.example/fetch?u=https%3A%2F%2Fpatents.google.com%2Fpatent%2FUS261A%2Fen', headers: { 'x-relay-key': 'secret' } });
+    expect(calls[1]!.url).toBe('https://patentimages.storage.googleapis.com/a.png');
+  });
+  it('goes direct when no relay is set up', () => {
+    expect(relayFetcher(undefined, undefined, direct)).toBe(direct);
+    expect(relayFetcher('https://relay.example', undefined, direct)).toBe(direct);
+  });
+});
+
+describe('search keeping and failure', () => {
+  const feed = (title: string) => JSON.stringify({ results: { total_num_results: 1, total_num_pages: 1, cluster: [{ result: [{ patent: { title, publication_number: 'US1A' } }] }] } });
+  const ask = (store: Store, doFetch: (u: string) => Promise<Response>) => handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch as never);
+
+  it('keeps a search and does not ask again within a week', async () => {
+    const { m, store } = memory();
+    let asked = 0;
+    const doFetch = async () => { asked++; return new Response(feed('First')); };
+    await ask(store, doFetch);
+    const again = await ask(store, doFetch);
+    expect(asked).toBe(1);
+    expect(((await again!.json()) as { hits: { title: string }[] }).hits[0]!.title).toBe('First');
+    expect([...m.keys()].every((k) => k.startsWith('patent-plotter/search/'))).toBe(true);
+  });
+  it('uses an old kept search when the source is down, and says so when there is none', async () => {
+    const { m, store } = memory();
+    await ask(store, async () => new Response(feed('Old')));
+    const [key, val] = [...m.entries()][0]!;
+    m.set(key, { ...val, body: new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(val.body)), cachedAt: 0 })).buffer as ArrayBuffer }); // a long time ago
+    const down = await ask(store, async () => { throw new Error('tunnel down'); });
+    expect(down!.status).toBe(200);
+    expect(((await down!.json()) as { hits: { title: string }[] }).hits[0]!.title).toBe('Old');
+
+    const empty = memory();
+    const none = await ask(empty.store, async () => { throw new Error('tunnel down'); });
+    expect(none!.status).toBe(502);
+    expect(((await none!.json()) as { error: string }).error).toMatch(/could not reach/);
+    expect(empty.m.size).toBe(0); // a failure is not kept
+  });
+  it('says the source could not be reached when a patent page lookup cannot connect', async () => {
+    const { store } = memory();
+    const r = await handleApi(new Request('http://x/api/patent/US261A'), store, async () => { throw new Error('tunnel down'); });
+    expect(r!.status).toBe(502);
+    expect(((await r!.json()) as { error: string }).error).toMatch(/could not reach/);
   });
 });

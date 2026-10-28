@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "relay": "node relay/relay.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {

@@ -8,9 +8,11 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
+    "allowJs": true,
+    "checkJs": false,
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "test", "worker", "vite.config.ts"]
+  "include": ["src", "test", "worker", "relay", "vite.config.ts"]
 }

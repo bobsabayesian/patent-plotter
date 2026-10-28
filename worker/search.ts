@@ -2,7 +2,8 @@
  * Searching US patents, historic ones included (Google Patents reaches back to 1790; its text is OCR for the old ones, so
  * titles can be rough). Goes through the same JSON feed the Google Patents page itself uses; there is no official API.
  */
-import { decode, IMAGE_HOST, type Fetcher } from './patents.ts';
+import { decode, IMAGE_HOST, safeFetch, type Fetcher } from './patents.ts';
+import { PREFIX, type Store } from './store.ts';
 
 export interface SearchHit {
   /** the publication number to load, e.g. "US416697A" */
@@ -67,16 +68,36 @@ export function parseSearch(feed: unknown, page: number): SearchResult {
   return { total: results?.total_num_results ?? hits.length, pages: Math.min(100, results?.total_num_pages ?? 1), page, hits };
 }
 
-/** GET /api/search?q=&from=&to=&sort=old|new&page=  ->  SearchResult */
-export async function handleSearch(req: Request, doFetch: Fetcher = fetch): Promise<Response | null> {
+/** A search is kept this long before it is looked up again; one older than that is still used when the source is down. */
+const FRESH_MS = 7 * 24 * 3600 * 1000;
+
+async function hash(s: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(d).slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** GET /api/search?q=&from=&to=&sort=old|new&page=  ->  SearchResult  (kept in the bucket; see FRESH_MS) */
+export async function handleSearch(req: Request, store: Store, doFetch: Fetcher = fetch, now = Date.now()): Promise<Response | null> {
   const url = new URL(req.url);
   if (url.pathname !== '/api/search') return null;
   if (req.method !== 'GET') return json(405, { error: 'GET only' });
   const built = buildQuery(url.searchParams);
   if ('error' in built) return json(400, { error: built.error });
-  const r = await doFetch(`https://patents.google.com/xhr/query?url=${encodeURIComponent(built.inner)}&exp=`, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; patent-plotter)' } });
-  if (!r.ok) return json(502, { error: `patent search said ${r.status}; try again in a moment` });
-  let feed: unknown;
-  try { feed = await r.json(); } catch { return json(502, { error: 'patent search sent something unreadable' }); }
-  return json(200, parseSearch(feed, Math.floor(+(url.searchParams.get('page') ?? 0))));
+  const page = Math.floor(+(url.searchParams.get('page') ?? 0));
+
+  const key = `${PREFIX}search/${await hash(built.inner)}.json`;
+  const kept = await store.get(key);
+  let old: { cachedAt: number; result: SearchResult } | null = null;
+  try { if (kept) old = JSON.parse(new TextDecoder().decode(kept.body)); } catch { /* a damaged entry is looked up again */ }
+  if (old && now - old.cachedAt < FRESH_MS) return json(200, old.result);
+
+  const r = await safeFetch(doFetch, `https://patents.google.com/xhr/query?url=${encodeURIComponent(built.inner)}&exp=`, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; patent-plotter)' } });
+  let result: SearchResult | null = null;
+  if (r.ok) { try { result = parseSearch(await r.json(), page); } catch { /* unreadable: treated as a failure below */ } }
+  if (result) {
+    await store.put(key, new TextEncoder().encode(JSON.stringify({ cachedAt: now, result })).buffer as ArrayBuffer, 'application/json');
+    return json(200, result);
+  }
+  if (old) return json(200, old.result); // the source is down: an old answer beats none
+  return json(502, { error: r.status === 599 ? 'could not reach the patent source; try again in a moment' : `patent search said ${r.status}; try again in a moment` });
 }

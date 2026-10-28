@@ -1,0 +1,16 @@
+# systemd user unit: keeps the relay running.
+#   mkdir -p ~/.config/systemd/user && cp relay/patent-relay.service ~/.config/systemd/user/
+#   echo 'RELAY_KEY=<the key>' > ~/.config/patent-relay.env && chmod 600 ~/.config/patent-relay.env
+#   systemctl --user daemon-reload && systemctl --user enable --now patent-relay
+[Unit]
+Description=patent-plotter Google Patents relay
+
+[Service]
+WorkingDirectory=%h/projects/patent-plotter
+EnvironmentFile=%h/.config/patent-relay.env
+ExecStart=/usr/bin/env node relay/relay.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
