@@ -99,3 +99,25 @@ label.check { flex-direction: row; align-items: center; gap: 6px; margin: 6px 0;
 .tools .lab { font-size: 11px; color: var(--muted); width: 100%; margin-top: 2px; }
 .tools button { padding: 4px 9px; min-width: 32px; }
 .tools button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+
+.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(10, 8, 4, 0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(760px, 100%); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); }
+.dialog > header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.dialog > header h2 { margin: 0; text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--ink); }
+.dialog > footer { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); }
+.dialog > footer .hint { margin-right: auto; }
+.dlg-body { padding: 12px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.dlg-body textarea { margin: 0; font: 13px/1.45 ui-monospace, monospace; }
+.dlg-body h3 { margin: 8px 0 0; }
+.dlg-body .row label { flex-direction: column; }
+.dlg-preview { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px; max-height: 38dvh; overflow: auto; }
+.dlg-preview svg { display: block; width: 100%; height: auto; }
+.warn { margin: 0; padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, #f59e0b 18%, var(--panel)); border: 1px solid color-mix(in srgb, #f59e0b 55%, var(--line)); font-size: 12px; }
+.excerpt { margin: 6px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; max-height: 5.5em; overflow: hidden; }
+.crop-stage { display: flex; justify-content: center; background: color-mix(in srgb, var(--ink) 8%, var(--panel)); border-radius: 8px; padding: 8px; }
+.crop-box { position: relative; display: inline-block; line-height: 0; touch-action: none; cursor: crosshair; user-select: none; background: #fff; }
+.crop-box img { display: block; max-height: 56dvh; max-width: 100%; width: auto; height: auto; pointer-events: none; }
+.crop-box .shade { position: absolute; background: rgba(15, 12, 6, 0.55); pointer-events: none; }
+.crop-rect { position: absolute; outline: 2px solid var(--accent); cursor: move; }
+.crop-handle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--paper); border: 2px solid var(--accent); border-radius: 3px; }
+@media (hover: none) { .crop-handle { width: 22px; height: 22px; margin: -11px 0 0 -11px; } }

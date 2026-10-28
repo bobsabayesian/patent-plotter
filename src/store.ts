@@ -13,6 +13,8 @@ interface State {
   busy: string | null;
   error: string | null;
   save: Save;
+  /** the dialog that is open: editing the text of an element, or cropping a drawing */
+  editing: { kind: 'text' | 'crop'; id: string } | null;
   /** earlier and later states of the doc, for undo and redo */
   past: Doc[];
   future: Doc[];
@@ -25,6 +27,7 @@ interface State {
   redo(): void;
   duplicateEl(id: string): void;
   select(id: string | null): void;
+  setEditing(e: State['editing']): void;
   addFigure(sheet: number): void;
   addText(label: string, text: string, sizeMm?: number): void;
   updateEl(id: string, change: Partial<FigureEl> | Partial<TextEl>): void;
@@ -75,7 +78,7 @@ export const useStore = create<State>((set, get) => {
   };
 
   return {
-    doc: emptyDoc(), code: null, patent: null, selected: null, busy: null, error: null, save: 'idle', past: [], future: [],
+    doc: emptyDoc(), code: null, patent: null, selected: null, busy: null, error: null, save: 'idle', editing: null, past: [], future: [],
 
     async boot() {
       set({ busy: 'Starting…' });
@@ -96,7 +99,7 @@ export const useStore = create<State>((set, get) => {
         const saved = await loadSession(code);
         const doc = saved ? reviveDoc(saved) : emptyDoc();
         remember(code);
-        set({ code, doc, patent: null, selected: null, save: saved ? 'saved' : 'idle', past: [], future: [] });
+        set({ code, doc, patent: null, selected: null, save: saved ? 'saved' : 'idle', editing: null, past: [], future: [] });
         if (doc.patent) set({ patent: await fetchPatent(doc.patent) });
         set({ busy: null });
       } catch (e) { set({ busy: null, error: (e as Error).message }); }
@@ -139,6 +142,7 @@ export const useStore = create<State>((set, get) => {
       set({ selected: copy.id });
     },
     select: (id) => set({ selected: id }),
+    setEditing: (editing) => set({ editing }),
 
     addFigure(sheet) {
       const d = get().doc, page = pageMm(d), inner = page.w - 2 * d.marginMm;

@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { PAPERS, pageMm, type El, type FigureEl, type Rot, type TextEl } from './doc';
 import { alignTo, fitInside, type Align, type Box } from './geometry';
 import { buildScene, placeEl } from './layout';
+import { CropDialog } from './CropDialog';
+import { isWhole, rectFromCrop } from './crop';
 import { Preview } from './Preview';
+import { TextDialog } from './TextDialog';
 import { PEN_TYPES, penType, nearestTip } from './scene/pens';
 import { cleanCode } from './session';
 import { useStore } from './store';
@@ -26,6 +29,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable]')) return;
       const st = useStore.getState();
+      if (st.editing) return; // a dialog is open: its own keys apply
       const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
       if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) st.redo(); else st.undo(); return; }
       if (mod && key === 'y') { e.preventDefault(); st.redo(); return; }
@@ -85,9 +89,20 @@ export function App() {
           <label className="check" title="Snap to margins, the page middle and other things; hold Alt to place freely"><input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap</label>
         </div>
         <Preview doc={doc} vec={vec} zoom={zoom} snap={snap} />
+        <Dialogs />
       </main>
     </div>
   );
+}
+
+function Dialogs() {
+  const { doc, editing, setEditing } = useStore();
+  const el = editing && doc.elements.find((e) => e.id === editing.id);
+  if (!editing || !el) return null;
+  const close = () => setEditing(null);
+  if (editing.kind === 'text' && el.kind === 'text') return <TextDialog key={el.id} el={el} onClose={close} />;
+  if (editing.kind === 'crop' && el.kind === 'figure') return <CropDialog key={el.id} el={el} onClose={close} />;
+  return null;
 }
 
 function SessionBox() {
@@ -288,10 +303,11 @@ function Editor({ el, err, vecs }: { el: El; err?: string; vecs: ReadonlyMap<str
 }
 
 function TextFields({ el }: { el: TextEl }) {
-  const { updateEl } = useStore();
+  const { updateEl, setEditing } = useStore();
   return (
     <>
-      <textarea rows={4} value={el.text} onChange={(e) => updateEl(el.id, { text: e.target.value })} aria-label="Text" />
+      <p className="excerpt">{el.text.length > 140 ? `${el.text.slice(0, 140)}…` : el.text || <em>(empty)</em>}</p>
+      <div className="row"><button onClick={() => setEditing({ kind: 'text', id: el.id })} title="Or double-click it on the page">Edit text…</button></div>
       <div className="tools" role="group" aria-label="Text alignment">
         <span className="lab">Text alignment</span>
         {(['left', 'center', 'right'] as const).map((a) => <button key={a} className={el.align === a ? 'on' : ''} onClick={() => updateEl(el.id, { align: a })}>{a[0]!.toUpperCase() + a.slice(1)}</button>)}
@@ -303,8 +319,7 @@ function TextFields({ el }: { el: TextEl }) {
 }
 
 function FigureFields({ el, err }: { el: FigureEl; err?: string }) {
-  const { patent, updateEl } = useStore();
-  const sides = ['Top', 'Right', 'Bottom', 'Left'];
+  const { patent, updateEl, setEditing } = useStore();
   return (
     <>
       <div className="row">
@@ -320,13 +335,12 @@ function FigureFields({ el, err }: { el: FigureEl; err?: string }) {
           </select>
         </label>
       </div>
-      <div className="grid4">
-        {sides.map((side, k) => (
-          <Num key={side} label={`${side} %`} value={el.crop[k]! * 100} step={1} onChange={(v) => updateEl(el.id, { crop: el.crop.map((c, j) => (j === k ? Math.min(90, Math.max(0, v)) / 100 : c)) as FigureEl['crop'] })} />
-        ))}
+      <div className="row">
+        <button onClick={() => setEditing({ kind: 'crop', id: el.id })} title="Or double-click it on the page">Crop…</button>
+        {!isWhole(rectFromCrop(el.crop)) && <button onClick={() => updateEl(el.id, { crop: [0, 0, 0, 0] })}>Whole sheet</button>}
+        <span className="hint">{isWhole(rectFromCrop(el.crop)) ? 'Showing the whole sheet' : `Showing ${Math.round((1 - el.crop[1] - el.crop[3]) * 100)}% × ${Math.round((1 - el.crop[0] - el.crop[2]) * 100)}% of it`}</span>
       </div>
       <label className="check"><input type="checkbox" checked={el.cleanEdges} disabled={el.method !== 'lineart'} onChange={(e) => updateEl(el.id, { cleanEdges: e.target.checked })} /> Clean scan edges (page curls, paper edge)</label>
-      <p className="hint">Trim a sheet to show one figure, or to cut off the page header.</p>
       {err && <p className="err">{err}</p>}
     </>
   );

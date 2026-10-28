@@ -24,7 +24,7 @@ type Drag = { kind: 'move'; id: string; dx: number; dy: number; w: number; h: nu
 const SNAP_PX = 6;
 
 export function Preview({ doc, vec, zoom, snap }: { doc: Doc; vec: VectorState; zoom: number; snap: boolean }) {
-  const { selected, select, updateEl } = useStore();
+  const { selected, select, updateEl, setEditing } = useStore();
   const page = pageMm(doc);
   const scene = buildScene(doc, vec.vecs);
   const svg = useRef<SVGSVGElement>(null);
@@ -106,6 +106,7 @@ export function Preview({ doc, vec, zoom, snap }: { doc: Doc; vec: VectorState; 
             <rect
               x={x} y={y} width={w} height={h}
               className={`hit${on ? ' on' : ''}`}
+              onDoubleClick={() => { drag.current = null; setEditing({ kind: el.kind === 'text' ? 'text' : 'crop', id: el.id }); }}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 select(el.id);

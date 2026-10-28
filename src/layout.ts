@@ -1,6 +1,7 @@
 import type { Doc, El, FigureEl, TextEl } from './doc';
 import { pageMm } from './doc';
 import { layoutText } from './hatch/strokefont';
+import { prepareText } from './text';
 import type { Layer, Line, Scene } from './scene/types';
 import type { XY } from './vector/simplify';
 import type { Vectorized } from './vectorize/client';
@@ -47,7 +48,7 @@ const put = (l: Local, x: number, y: number, scale = 1): Placed => ({
 
 export function placeText(el: TextEl): Placed {
   const s = el.sizeMm / CAP_UNITS;
-  const rows = wrap(el.text, el.w / s);
+  const rows = wrap(prepareText(el.text), el.w / s);
   const lines: Line[] = [];
   rows.forEach((row, i) => {
     const base = (CAP_UNITS + i * LINE_UNITS) * s;

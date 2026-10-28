@@ -49,5 +49,5 @@ export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(version), __APP_COMMIT__: JSON.stringify(commit()) },
   plugins: [react(), devApi],
   worker: { format: 'es' },
-  test: { include: ['test/**/*.test.ts'] },
+  test: { include: ['test/**/*.test.{ts,tsx}'] },
 });
