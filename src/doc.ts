@@ -14,6 +14,8 @@ export interface FigureEl {
   method: Method;
   /** fractions of the sheet trimmed off: top, right, bottom, left */
   crop: [number, number, number, number];
+  /** drop what a scan leaves at the sheet's edge (page curls, the paper's edge); line art only */
+  cleanEdges: boolean;
 }
 export interface TextEl {
   id: string; kind: 'text';
@@ -63,7 +65,7 @@ export function reviveDoc(raw: unknown): Doc {
   const pens = Array.isArray(r.pens) && r.pens.length ? r.pens.filter((p) => p && typeof p.color === 'string').map((p, i) => ({ ...newPen(i + 1), ...p })) : base.pens;
   const clampPen = (n: unknown) => (typeof n === 'number' && n >= 0 && n < pens.length ? n : 0);
   const elements = (Array.isArray(r.elements) ? r.elements : []).flatMap((e): El[] => {
-    if (e?.kind === 'figure') return [{ id: String(e.id), kind: 'figure', sheet: Math.max(0, e.sheet | 0), pen: clampPen(e.pen), x: +e.x || 0, y: +e.y || 0, w: +e.w > 0 ? +e.w : 100, method: e.method === 'edges' ? 'edges' : 'lineart', crop: Array.isArray(e.crop) && e.crop.length === 4 ? (e.crop.map((c) => Math.min(0.9, Math.max(0, +c || 0))) as FigureEl['crop']) : [0, 0, 0, 0] }];
+    if (e?.kind === 'figure') return [{ id: String(e.id), kind: 'figure', sheet: Math.max(0, e.sheet | 0), pen: clampPen(e.pen), x: +e.x || 0, y: +e.y || 0, w: +e.w > 0 ? +e.w : 100, method: e.method === 'edges' ? 'edges' : 'lineart', crop: Array.isArray(e.crop) && e.crop.length === 4 ? (e.crop.map((c) => Math.min(0.9, Math.max(0, +c || 0))) as FigureEl['crop']) : [0, 0, 0, 0], cleanEdges: e.cleanEdges !== false }];
     if (e?.kind === 'text') return [{ id: String(e.id), kind: 'text', label: String(e.label ?? 'Text'), text: String(e.text ?? ''), pen: clampPen(e.pen), x: +e.x || 0, y: +e.y || 0, w: +e.w > 0 ? +e.w : 100, sizeMm: +e.sizeMm > 0 ? +e.sizeMm : 5 }];
     return [];
   });

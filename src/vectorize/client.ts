@@ -22,14 +22,14 @@ function getWorker(): Worker {
 }
 
 /** Vectorize a drawing sheet; the same sheet with the same settings is only done once. */
-export function vectorize(url: string, method: Method, crop: [number, number, number, number]): Promise<Vectorized> {
-  const key = `${url}|${method}|${crop.join(',')}`;
+export function vectorize(url: string, method: Method, crop: [number, number, number, number], cleanEdges = true): Promise<Vectorized> {
+  const key = `${url}|${method}|${crop.join(',')}|${cleanEdges}`;
   let p = cache.get(key);
   if (!p) {
     p = new Promise<Vectorized>((ok, fail) => {
       const id = nextId++;
       waiting.set(id, { ok, fail });
-      getWorker().postMessage({ id, url, method, crop } satisfies VectorizeRequest);
+      getWorker().postMessage({ id, url, method, crop, cleanEdges } satisfies VectorizeRequest);
     });
     p.catch(() => cache.delete(key));
     cache.set(key, p);

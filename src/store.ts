@@ -101,7 +101,7 @@ export const useStore = create<State>((set, get) => {
 
     addFigure(sheet) {
       const d = get().doc, page = pageMm(d), inner = page.w - 2 * d.marginMm;
-      const el: FigureEl = { id: elId(), kind: 'figure', sheet, pen: 0, x: d.marginMm, y: d.marginMm, w: inner, method: 'lineart', crop: [0, 0, 0, 0] };
+      const el: FigureEl = { id: elId(), kind: 'figure', sheet, pen: 0, x: d.marginMm, y: d.marginMm, w: inner, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true };
       edit((d) => ({ ...d, elements: [...d.elements, el] }));
       set({ selected: el.id });
     },

@@ -87,3 +87,4 @@ button.danger { color: var(--danger); }
 .hits strong { font-weight: 600; overflow-wrap: anywhere; }
 .hits small { color: var(--muted); overflow-wrap: anywhere; }
 .hits .snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+label.check { flex-direction: row; align-items: center; gap: 6px; margin: 6px 0; }

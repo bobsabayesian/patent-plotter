@@ -26,7 +26,7 @@ async function run(req: VectorizeRequest): Promise<VectorizeResponse> {
     for (let i = 0; i < gray.length; i++) luma[i] = gray[i]! / 255;
     lines = edgeLines(luma, w, h, { scale: 1, strength: 0.25 });
   } else {
-    lines = vectorizeLineArt(gray, w, h);
+    lines = vectorizeLineArt(gray, w, h, { cleanEdges: req.cleanEdges });
   }
   return { id: req.id, ok: true, lines, width: w, height: h };
 }

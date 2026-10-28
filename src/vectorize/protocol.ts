@@ -8,6 +8,8 @@ export interface VectorizeRequest {
   method: Method;
   /** fractions of the sheet to trim off: top, right, bottom, left */
   crop: [number, number, number, number];
+  /** drop what a scan leaves at the sheet's edge (line art only) */
+  cleanEdges: boolean;
 }
 export type VectorizeResponse =
   | { id: number; ok: true; lines: XY[][]; width: number; height: number }

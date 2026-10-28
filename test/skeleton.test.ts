@@ -46,6 +46,27 @@ describe('vectorizeLineArt', () => {
     expect(lines).toHaveLength(1);
   });
 
+  it('ignores the black bands and bars a scan leaves at the sheet edge, but keeps a drawn border joined to the drawing', () => {
+    const g = page(120, 100, (ink) => { for (let x = 0; x < 120; x += 0.5) for (let y = 90; y < 100; y += 0.5) ink(x, y, 0.4); for (let y = 0; y < 60; y += 0.5) ink(0.5, y, 0.8); for (let a = 0; a < 6.3; a += 0.03) ink(60 + 20 * Math.cos(a), 40 + 20 * Math.sin(a), 1.5); });
+    const lines = vectorizeLineArt(g, 120, 100);
+    expect(lines).toHaveLength(1); // the ring only
+    const frame = page(120, 100, (ink) => { for (let t = 1; t < 119; t += 0.5) { ink(t, 1, 1); ink(t, 98, 1); } for (let t = 1; t < 99; t += 0.5) { ink(1, t, 1); ink(118, t, 1); } for (let a = 0; a < 6.3; a += 0.03) ink(60 + 28 * Math.cos(a), 50 + 28 * Math.sin(a), 1.2); for (let t = 1; t < 22; t += 0.5) ink(60, t, 1); });
+    const border = vectorizeLineArt(frame, 120, 100);
+    expect(border.length).toBeGreaterThan(0);
+    expect(border.reduce((n, l) => n + length(l), 0)).toBeGreaterThan(550); // the frame and the ring
+  });
+
+  it('drops the paper edge, a page curl and a binding shadow, but not drawing near them', () => {
+    const g = page(200, 300, (ink) => {
+      for (let y = 10; y < 290; y += 0.5) ink(176, y, 0.8); // the paper's edge, a long thin line near the right
+      for (let x = 5; x < 150; x += 0.5) ink(x, 292, 0.8); // a line along the bottom
+      for (let a = 0; a < 6.3; a += 0.03) ink(90 + 30 * Math.cos(a), 150 + 30 * Math.sin(a), 1.5); // the drawing
+      for (let y = 120; y < 180; y += 0.5) ink(197, y, 0.8); // a short mark in the outer band: still scan debris
+    });
+    expect(vectorizeLineArt(g, 200, 300)).toHaveLength(1);
+    expect(vectorizeLineArt(g, 200, 300, { cleanEdges: false }).length).toBeGreaterThan(1);
+  });
+
   it('orders the lines so the pen does not jump back and forth', () => {
     const g = page(200, 40, (ink) => { for (const x0 of [10, 60, 110, 160]) for (let x = x0; x <= x0 + 30; x += 0.5) ink(x, 20, 1.5); });
     const lines = vectorizeLineArt(g, 200, 40);

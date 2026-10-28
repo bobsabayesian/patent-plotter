@@ -264,6 +264,7 @@ function FigureFields({ el, err }: { el: FigureEl; err?: string }) {
           <Num key={side} label={`${side} %`} value={el.crop[k]! * 100} step={1} onChange={(v) => updateEl(el.id, { crop: el.crop.map((c, j) => (j === k ? Math.min(90, Math.max(0, v)) / 100 : c)) as FigureEl['crop'] })} />
         ))}
       </div>
+      <label className="check"><input type="checkbox" checked={el.cleanEdges} disabled={el.method !== 'lineart'} onChange={(e) => updateEl(el.id, { cleanEdges: e.target.checked })} /> Clean scan edges (page curls, paper edge)</label>
       <p className="hint">Trim a sheet to show one figure, or to cut off the page header.</p>
       {err && <p className="err">{err}</p>}
     </>

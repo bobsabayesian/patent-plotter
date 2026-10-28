@@ -14,13 +14,15 @@ export interface SkeletonOptions {
   minBlob: number;
   /** a branch shorter than this many pixels, ending free at a junction, is a burr from thinning and is cut off */
   spur: number;
+  /** drop what a scan leaves at the sheet's edge: solid bands, page curls, long thin lines near the border */
+  cleanEdges: boolean;
   /** Douglas-Peucker tolerance, pixels */
   tolerance: number;
   /** lines shorter than this many pixels are dropped */
   minLength: number;
 }
 
-export const DEFAULT_SKELETON: SkeletonOptions = { threshold: 0, minBlob: 12, spur: 6, tolerance: 0.8, minLength: 4 };
+export const DEFAULT_SKELETON: SkeletonOptions = { threshold: 0, minBlob: 12, spur: 6, cleanEdges: true, tolerance: 0.8, minLength: 4 };
 
 /** Otsu's threshold of 8-bit grey values. */
 export function otsu(gray: Uint8Array | Uint8ClampedArray): number {
@@ -53,16 +55,25 @@ export function inkMask(gray: Uint8Array | Uint8ClampedArray, threshold: number)
 
 const N8: [number, number][] = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]];
 
-/** Drop 8-connected ink blobs of fewer than `minBlob` pixels. Changes `m`. */
-export function despeckle(m: Uint8Array, w: number, h: number, minBlob: number): void {
+/**
+ * Drop 8-connected ink blobs that are not drawing: dust (fewer than `minBlob` pixels) and, with `cleanEdges`, what a
+ * scan leaves at the sheet's edge: solid bands and bars touching it, anything lying wholly in the outer 4%, and long
+ * thin lines (the paper's own edge, a binding shadow) in the outer 15%, and long sparse tangles of them that lie almost
+ * wholly in that border (the paper's edge joined to a page curl). Header lettering and drawings are not long and sparse
+ * in the border, so they stay; so does a frame that is joined to the drawing. Changes `m`.
+ */
+export function despeckle(m: Uint8Array, w: number, h: number, minBlob: number, cleanEdges = true): void {
   const seen = new Uint8Array(m.length);
   const stack: number[] = [];
+  const EDGE = 2;
   for (let s = 0; s < m.length; s++) {
     if (!m[s] || seen[s]) continue;
     const blob: number[] = [s];
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
     seen[s] = 1; stack.push(s);
     while (stack.length) {
       const p = stack.pop()!, x = p % w, y = (p - x) / w;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
       for (const [dx, dy] of N8) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
@@ -70,7 +81,24 @@ export function despeckle(m: Uint8Array, w: number, h: number, minBlob: number):
         if (m[q] && !seen[q]) { seen[q] = 1; stack.push(q); blob.push(q); }
       }
     }
-    if (blob.length < minBlob) for (const p of blob) m[p] = 0;
+    let drop = blob.length < minBlob;
+    if (cleanEdges && !drop) {
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+      const touchesEdge = x0 < EDGE || y0 < EDGE || x1 >= w - EDGE || y1 >= h - EDGE;
+      const solid = blob.length / (bw * bh) > 0.5;
+      const inBand = x1 < 0.04 * w || x0 > 0.96 * w || y1 < 0.04 * h || y0 > 0.96 * h;
+      const tallThin = bh >= 0.5 * h && bw <= 0.03 * w && (x1 < 0.15 * w || x0 > 0.85 * w);
+      const wideThin = bw >= 0.5 * w && bh <= 0.03 * h && (y1 < 0.15 * h || y0 > 0.85 * h);
+      const long = bw >= 0.5 * w || bh >= 0.5 * h;
+      let borderTangle = false;
+      if (long && !solid) {
+        let inBorder = 0;
+        for (const p of blob) { const x = p % w, y = (p - x) / w; if (x < 0.15 * w || x >= 0.85 * w || y < 0.15 * h || y >= 0.85 * h) inBorder++; }
+        borderTangle = inBorder >= 0.9 * blob.length;
+      }
+      drop = (touchesEdge && solid && blob.length >= 30) || inBand || tallThin || wideThin || borderTangle;
+    }
+    if (drop) for (const p of blob) m[p] = 0;
   }
 }
 
@@ -306,7 +334,7 @@ export function orderLines(lines: XY[][]): XY[][] {
 export function vectorizeLineArt(gray: Uint8Array | Uint8ClampedArray, w: number, h: number, opts: Partial<SkeletonOptions> = {}): XY[][] {
   const o = { ...DEFAULT_SKELETON, ...opts };
   const m = inkMask(gray, o.threshold);
-  despeckle(m, w, h, o.minBlob);
+  despeckle(m, w, h, o.minBlob, o.cleanEdges);
   thin(m, w, h);
   return orderLines(traceSkeleton(m, w, h, o));
 }
