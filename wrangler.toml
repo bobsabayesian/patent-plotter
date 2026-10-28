@@ -11,19 +11,7 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*"]
 
-# everything is kept under the patent-plotter/ prefix: sessions, cached patent records, cached drawing images
+# everything is kept under the patent-plotter/ prefix: sessions and the PDFs visitors upload
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "project-files"
-
-# Google Patents refuses Cloudflare's servers: its search and pages are fetched through a relay on a home connection
-# (relay/README.md). The key is a secret: `npx wrangler secret put RELAY_KEY`
-[vars]
-RELAY_URL = "https://patents-relay.bobsabayesian.io"
-
-# each visitor may make 12 lookups a minute that go out to Google (answers kept in the bucket do not count), so one
-# visitor cannot get the home connection behind the relay refused by Google
-[[ratelimits]]
-name = "LOOKUP_LIMITER"
-namespace_id = "7301"
-simple = { limit = 12, period = 60 }

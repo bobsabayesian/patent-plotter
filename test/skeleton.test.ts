@@ -67,6 +67,24 @@ describe('vectorizeLineArt', () => {
     expect(vectorizeLineArt(g, 200, 300, { cleanEdges: false }).length).toBeGreaterThan(1);
   });
 
+  it('clears a ragged black band along the edge even when it is joined to a mark that runs up the page', () => {
+    const g = page(200, 300, (ink) => {
+      for (let x = 0; x < 200; x += 0.5) { const top = 275 + 3 * Math.sin(x / 4); for (let y = top; y < 300; y += 0.5) ink(x, y, 0.4); } // the band, with a wavy top edge
+      for (let y = 100; y < 280; y += 0.5) ink(2, y, 0.8); // a bar at the left edge, joined to the band
+      for (let a = 0; a < 6.3; a += 0.03) ink(100 + 30 * Math.cos(a), 150 + 30 * Math.sin(a), 1.5); // the drawing
+    });
+    const lines = vectorizeLineArt(g, 200, 300);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.every(([, y]) => y < 200)).toBe(true);
+  });
+
+  it('keeps a drawing that has solid areas, and a sheet with no band at all', () => {
+    const g = page(200, 300, (ink) => { for (let x = 60; x < 140; x += 0.5) for (let y = 100; y < 130; y += 0.5) ink(x, y, 0.4); }); // a solid block in the middle
+    expect(vectorizeLineArt(g, 200, 300).length).toBeGreaterThan(0);
+    const frame = page(200, 300, (ink) => { for (let t = 0; t < 200; t += 0.5) { ink(t, 20, 1); ink(t, 280, 1); } for (let t = 20; t < 280; t += 0.5) { ink(20, t, 1); ink(180, t, 1); } for (let a = 0; a < 6.3; a += 0.03) ink(100 + 30 * Math.cos(a), 150 + 30 * Math.sin(a), 1.5); for (let t = 20; t < 120; t += 0.5) ink(100, t, 1); }); // a frame, joined to the ring by a spoke
+    expect(vectorizeLineArt(frame, 200, 300).reduce((n, l) => n + length(l), 0)).toBeGreaterThan(900); // frame and ring both survive
+  });
+
   it('orders the lines so the pen does not jump back and forth', () => {
     const g = page(200, 40, (ink) => { for (const x0 of [10, 60, 110, 160]) for (let x = x0; x <= x0 + 30; x += 0.5) ink(x, 20, 1.5); });
     const lines = vectorizeLineArt(g, 200, 40);

@@ -102,6 +102,33 @@ export function despeckle(m: Uint8Array, w: number, h: number, minBlob: number, 
   }
 }
 
+/**
+ * Clear the solid black bands a scan leaves along a sheet's edge, whatever else they are joined to: from each side,
+ * rows (or columns) that are mostly ink, counted inward from the edge (a thin white strip at the very edge is allowed),
+ * plus a little more where the band's ragged inner edge is. Changes `m`.
+ */
+export function stripSolidEdges(m: Uint8Array, w: number, h: number): void {
+  const SOLID = 0.5, RAGGED = 0.12;
+  /** how many lines to clear from one side: `count` lines of `len` pixels, `at(i, j)` the pixel j of line i counted from the edge */
+  const depth = (count: number, len: number, at: (i: number, j: number) => number) => {
+    const frac = (i: number) => { let n = 0; for (let j = 0; j < len; j++) n += m[at(i, j)]!; return n / len; };
+    const limit = Math.floor(count * 0.08), gap = Math.max(1, Math.floor(count * 0.04));
+    let i = 0;
+    while (i < gap && frac(i) < SOLID) i++; // the strip of white at the very edge, if any
+    const start = i;
+    while (i < limit && frac(i) >= SOLID) i++;
+    if (i - start < Math.max(4, Math.ceil(count * 0.01))) return 0; // thinner than any scan band: a drawn line, such as a border frame
+    while (i < limit + gap && frac(i) >= RAGGED) i++;
+    return i;
+  };
+  const clearRows = (n: number, fromBottom: boolean) => { for (let i = 0; i < n; i++) { const y = fromBottom ? h - 1 - i : i; m.fill(0, y * w, (y + 1) * w); } };
+  const clearCols = (n: number, fromRight: boolean) => { for (let i = 0; i < n; i++) { const x = fromRight ? w - 1 - i : i; for (let y = 0; y < h; y++) m[y * w + x] = 0; } };
+  clearRows(depth(h, w, (i, j) => i * w + j), false);
+  clearRows(depth(h, w, (i, j) => (h - 1 - i) * w + j), true);
+  clearCols(depth(w, h, (i, j) => j * w + i), false);
+  clearCols(depth(w, h, (i, j) => j * w + (w - 1 - i)), true);
+}
+
 /** Zhang-Suen thinning: peel the outline off every stroke, two directions in turn, until only a one-pixel line is left. Changes `m`. */
 export function thin(m: Uint8Array, w: number, h: number): void {
   // work on a copy with a one-pixel frame of zeros, so the neighbours never need a bounds check
@@ -334,6 +361,7 @@ export function orderLines(lines: XY[][]): XY[][] {
 export function vectorizeLineArt(gray: Uint8Array | Uint8ClampedArray, w: number, h: number, opts: Partial<SkeletonOptions> = {}): XY[][] {
   const o = { ...DEFAULT_SKELETON, ...opts };
   const m = inkMask(gray, o.threshold);
+  if (o.cleanEdges) stripSolidEdges(m, w, h);
   despeckle(m, w, h, o.minBlob, o.cleanEdges);
   thin(m, w, h);
   return orderLines(traceSkeleton(m, w, h, o));

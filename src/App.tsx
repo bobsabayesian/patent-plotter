@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PAPERS, pageMm, type El, type FigureEl, type Rot, type TextEl } from './doc';
 import { alignTo, fitInside, type Align, type Box } from './geometry';
 import { buildScene, placeEl } from './layout';
@@ -7,10 +7,10 @@ import { isWhole, rectFromCrop } from './crop';
 import { Preview } from './Preview';
 import { TextDialog } from './TextDialog';
 import { PEN_TYPES, penType, nearestTip } from './scene/pens';
+import { pagePng } from './pdfStore';
 import { cleanCode } from './session';
 import { useStore } from './store';
 import type { Vectorized } from './vectorize/client';
-import type { SearchResult } from '../worker/search.ts';
 import { sceneToSvg } from './svg';
 import { useVectors } from './useVectors';
 
@@ -18,8 +18,9 @@ const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+
 
 export function App() {
   const s = useStore();
-  const { doc, patent } = s;
-  const vec = useVectors(doc, patent);
+  const { doc } = s;
+  const vec = useVectors(doc, s.code);
+  const [over, setOver] = useState(false);
   useEffect(() => { void s.boot(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [zoom, setZoom] = useState(1);
   const [snap, setSnap] = useState(true);
@@ -52,7 +53,7 @@ export function App() {
     const svg = sceneToSvg(scene, { metadata: `<metadata id="patent-plotter">${meta}</metadata>` });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
-    a.download = `${doc.patent ?? 'patent'}-${stamp()}.svg`;
+    a.download = `${(doc.sources[0]?.name ?? 'patent').replace(/[^\w.-]+/g, '_').slice(0, 60)}-${stamp()}.svg`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   };
@@ -60,13 +61,18 @@ export function App() {
 
   return (
     <div className="app">
-      <aside className="panel">
+      <aside
+        className={`panel${over ? ' over' : ''}`}
+        onDragOver={(e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); setOver(true); } }}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setOver(false); }}
+        onDrop={(e) => { e.preventDefault(); setOver(false); for (const f of e.dataTransfer.files) void s.addPdf(f); }}
+      >
         <header>
           <h1>Patent Plotter</h1>
-          <p className="sub">US patent drawings, for pen plotters</p>
+          <p className="sub">Patent drawings, for pen plotters</p>
         </header>
         <SessionBox />
-        <PatentBox />
+        <PdfBox />
         <PaperBox />
         <PensBox />
         <Elements vec={vec} />
@@ -126,53 +132,62 @@ function SessionBox() {
   );
 }
 
-function PatentBox() {
-  const { patent, doc, loadPatent, addFigure, addText } = useStore();
-  const [num, setNum] = useState('');
-  const [claim, setClaim] = useState(1);
+function PdfBox() {
+  const { doc, busy, addPdf, removeSource, addFigure, addTextFromPage } = useStore();
+  const input = useRef<HTMLInputElement>(null);
   return (
     <section>
-      <h2>Patent</h2>
-      <Search />
-      <p className="or">or load by number</p>
-      <form className="row" onSubmit={(e) => { e.preventDefault(); if (num.trim()) void loadPatent(num); }}>
-        <input value={num} onChange={(e) => setNum(e.target.value)} placeholder="US patent number, e.g. 7,654,321" aria-label="US patent number" spellCheck={false} />
-        <button type="submit" disabled={!num.trim()}>Load</button>
-      </form>
-      {patent ? (
-        <>
-          <p className="title"><strong>{patent.id}</strong> {patent.title}</p>
-          <p className="hint">{[patent.inventors.slice(0, 3).join(', '), patent.issued].filter(Boolean).join(' · ')}</p>
-          <h3>Drawing sheets <small>click to place</small></h3>
+      <h2>Patent PDFs</h2>
+      <div className="row">
+        <button className="primary" onClick={() => input.current?.click()} disabled={!!busy}>Upload a PDF…</button>
+        <input ref={input} type="file" accept="application/pdf,.pdf" multiple hidden onChange={(e) => { for (const f of e.target.files ?? []) void addPdf(f); e.target.value = ''; }} />
+        <span className="hint">or drop one anywhere here</span>
+      </div>
+      <p className="hint">Download a patent as a PDF from the patent office or Google Patents. Up to 30 MB each.</p>
+      {doc.sources.map((src) => (
+        <div className="source" key={src.id}>
+          <div className="row">
+            <strong className="grow" title={src.name}>{src.name}</strong>
+            <small>{src.pages} {src.pages === 1 ? 'page' : 'pages'}</small>
+            <button onClick={() => { if (!doc.elements.some((e) => e.kind === 'figure' && e.src === src.id) || confirm(`Remove ${src.name}? Drawings from it are taken off the page too.`)) removeSource(src.id); }} aria-label={`Remove ${src.name}`}>×</button>
+          </div>
+          <p className="hint">Click a page to draw it. <b>Aa</b> takes the text from a page instead.</p>
           <div className="sheets">
-            {patent.drawings.map((u, i) => (
-              <button key={u} className="sheet" onClick={() => addFigure(i)} title={`Place sheet ${i + 1}`}>
-                <img src={`/api/img?u=${encodeURIComponent(u)}`} alt={`Drawing sheet ${i + 1}`} loading="lazy" />
-                <span>{i + 1}</span>
-              </button>
-            ))}
-            {!patent.drawings.length && <p className="hint">This patent has no drawings.</p>}
+            {Array.from({ length: src.pages }, (_, i) => <PageThumb key={i} src={src.id} page={i} onPlace={() => addFigure(src.id, i)} onText={() => void addTextFromPage(src.id, i)} />)}
           </div>
-          <h3>Text <small>click to add</small></h3>
-          <div className="chips">
-            <button onClick={() => addText('Title', patent.title, 6)}>Title</button>
-            <button onClick={() => addText('Number & date', `${patent.id}${patent.issued ? ` · granted ${patent.issued}` : ''}`, 3)}>Number & date</button>
-            {!!patent.inventors.length && <button onClick={() => addText('Inventors', patent.inventors.join(', '), 3)}>Inventors</button>}
-            {!!patent.assignee && <button onClick={() => addText('Assignee', patent.assignee, 3)}>Assignee</button>}
-            {!!patent.abstract && <button onClick={() => addText('Abstract', patent.abstract, 2.6)}>Abstract</button>}
-            <button onClick={() => addText('Custom text', 'Your words here', 5)}>Custom text</button>
-          </div>
-          {!!patent.claims.length && (
-            <div className="row">
-              <label className="grow">Claim <input type="number" min={1} max={patent.claims.length} value={claim} onChange={(e) => setClaim(Math.min(patent.claims.length, Math.max(1, +e.target.value || 1)))} /> of {patent.claims.length}</label>
-              <button onClick={() => addText(`Claim ${claim}`, patent.claims[claim - 1]!, 2.6)}>Add claim</button>
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="hint">{doc.patent ? `Loading ${doc.patent}…` : 'Type a US patent number to begin. Grants and design patents work; applications do not yet.'}</p>
-      )}
+        </div>
+      ))}
+      {!doc.sources.length && <p className="hint">Nothing uploaded yet.</p>}
     </section>
+  );
+}
+
+/** One page of a PDF as a button: drawn when it scrolls into view, so a long patent does not render all at once. */
+function PageThumb({ src, page, onPlace, onText }: { src: string; page: number; onPlace: () => void; onText: () => void }) {
+  const code = useStore((s) => s.code);
+  const box = useRef<HTMLDivElement>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [bad, setBad] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !code || url) return;
+    let live = true;
+    const io = new IntersectionObserver((hits) => {
+      if (!hits.some((h) => h.isIntersecting)) return;
+      io.disconnect();
+      pagePng(code, src, page, 260).then((u) => { if (live) setUrl(u); }, () => { if (live) setBad(true); });
+    }, { rootMargin: '200px' });
+    io.observe(el);
+    return () => { live = false; io.disconnect(); };
+  }, [code, src, page, url]);
+  return (
+    <div className="sheet" ref={box}>
+      <button onClick={onPlace} title={`Draw page ${page + 1}`} aria-label={`Draw page ${page + 1}`}>
+        {url ? <img src={url} alt={`Page ${page + 1}`} /> : <span className="ph">{bad ? '!' : ''}</span>}
+      </button>
+      <span className="n">{page + 1}</span>
+      <button className="aa" onClick={onText} title={`Take the text from page ${page + 1}`} aria-label={`Take the text from page ${page + 1}`}>Aa</button>
+    </div>
   );
 }
 
@@ -233,7 +248,7 @@ function PensBox() {
 function Elements({ vec }: { vec: ReturnType<typeof useVectors> }) {
   const { doc, selected, select } = useStore();
   const el = doc.elements.find((e) => e.id === selected);
-  const name = (e: El) => (e.kind === 'figure' ? `Drawing, sheet ${e.sheet + 1}` : e.label);
+  const name = (e: El) => (e.kind === 'figure' ? `Drawing: ${doc.sources.find((x) => x.id === e.src)?.name ?? 'PDF'}, page ${e.page + 1}` : e.label);
   return (
     <section>
       <h2>On the page</h2>
@@ -318,13 +333,14 @@ function TextFields({ el }: { el: TextEl }) {
 }
 
 function FigureFields({ el, err }: { el: FigureEl; err?: string }) {
-  const { patent, updateEl, setEditing } = useStore();
+  const { doc, updateEl, setEditing } = useStore();
+  const source = doc.sources.find((x) => x.id === el.src);
   return (
     <>
       <div className="row">
-        <label className="grow">Sheet
-          <select value={el.sheet} onChange={(e) => updateEl(el.id, { sheet: +e.target.value })}>
-            {(patent?.drawings ?? []).map((_, i) => <option key={i} value={i}>{i + 1}</option>)}
+        <label className="grow">Page
+          <select value={el.page} onChange={(e) => updateEl(el.id, { page: +e.target.value })}>
+            {Array.from({ length: source?.pages ?? 1 }, (_, i) => <option key={i} value={i}>{i + 1}</option>)}
           </select>
         </label>
         <label className="grow">Trace
@@ -342,67 +358,5 @@ function FigureFields({ el, err }: { el: FigureEl; err?: string }) {
       <label className="check"><input type="checkbox" checked={el.cleanEdges} disabled={el.method !== 'lineart'} onChange={(e) => updateEl(el.id, { cleanEdges: e.target.checked })} /> Clean scan edges (page curls, paper edge)</label>
       {err && <p className="err">{err}</p>}
     </>
-  );
-}
-
-function Search() {
-  const { loadPatent } = useStore();
-  const [q, setQ] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [sort, setSort] = useState('');
-  const [res, setRes] = useState<(SearchResult & { query: string }) | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const run = async (page: number) => {
-    setBusy(true); setErr(null);
-    try {
-      const p = new URLSearchParams({ q, from, to, sort, page: String(page) });
-      const r = await fetch(`/api/search?${p}`);
-      const body = await r.json();
-      if (!r.ok) throw new Error(body.error ?? `search failed (${r.status})`);
-      const got = body as SearchResult;
-      setRes((old) => (page && old ? { ...got, hits: [...old.hits, ...got.hits], query: q } : { ...got, query: q }));
-    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="search">
-      <form className="row" onSubmit={(e) => { e.preventDefault(); if (q.trim()) void run(0); }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search patents, e.g. telephone, steam engine" aria-label="Search patents" />
-        <button type="submit" disabled={!q.trim() || busy}>{busy && !res ? 'Searching…' : 'Search'}</button>
-      </form>
-      <div className="row">
-        <input type="number" min={1790} max={new Date().getFullYear()} value={from} onChange={(e) => setFrom(e.target.value)} placeholder="From year" aria-label="From year" />
-        <input type="number" min={1790} max={new Date().getFullYear()} value={to} onChange={(e) => setTo(e.target.value)} placeholder="To year" aria-label="To year" />
-        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort order">
-          <option value="">Best match</option>
-          <option value="old">Oldest first</option>
-          <option value="new">Newest first</option>
-        </select>
-      </div>
-      {err && <p className="err">{err}</p>}
-      {res && (
-        <>
-          <p className="hint">{res.total.toLocaleString()} found for “{res.query}”{res.total > res.hits.length ? `, showing ${res.hits.length}` : ''}</p>
-          <ul className="hits">
-            {res.hits.map((h) => (
-              <li key={h.id}>
-                <button onClick={() => void loadPatent(h.id)} title={`Use ${h.id}`}>
-                  {h.thumb ? <img src={`/api/img?u=${encodeURIComponent(h.thumb)}`} alt="" loading="lazy" /> : <span className="noimg" />}
-                  <span className="txt">
-                    <strong>{h.title}</strong>
-                    <small>{[h.id, h.date, h.inventor || h.assignee].filter(Boolean).join(' · ')}</small>
-                    {h.snippet && <small className="snip">{h.snippet}</small>}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {res.page + 1 < res.pages && <button onClick={() => void run(res.page + 1)} disabled={busy}>{busy ? 'Loading…' : 'More results'}</button>}
-        </>
-      )}
-    </div>
   );
 }

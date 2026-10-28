@@ -1,5 +1,6 @@
 import type { Method, VectorizeRequest, VectorizeResponse } from './protocol';
 import type { XY } from '../vector/simplify';
+import { pageGray } from '../pdfStore';
 
 export interface Vectorized { lines: XY[][]; width: number; height: number }
 
@@ -21,16 +22,17 @@ function getWorker(): Worker {
   return worker;
 }
 
-/** Vectorize a drawing sheet; the same sheet with the same settings is only done once. */
-export function vectorize(url: string, method: Method, crop: [number, number, number, number], cleanEdges = true): Promise<Vectorized> {
-  const key = `${url}|${method}|${crop.join(',')}|${cleanEdges}`;
+/** Vectorize a page of an uploaded PDF; the same page with the same settings is only done once. */
+export function vectorize(code: string, src: string, page: number, method: Method, crop: [number, number, number, number], cleanEdges = true): Promise<Vectorized> {
+  const key = `${src}|${page}|${method}|${crop.join(',')}|${cleanEdges}`;
   let p = cache.get(key);
   if (!p) {
-    p = new Promise<Vectorized>((ok, fail) => {
+    p = pageGray(code, src, page).then((g) => new Promise<Vectorized>((ok, fail) => {
       const id = nextId++;
       waiting.set(id, { ok, fail });
-      getWorker().postMessage({ id, url, method, crop, cleanEdges } satisfies VectorizeRequest);
-    });
+      const gray = g.data.slice(); // the worker takes this copy; the rendered page stays here for the next trace
+      getWorker().postMessage({ id, gray, w: g.w, h: g.h, method, crop, cleanEdges } satisfies VectorizeRequest, [gray.buffer]);
+    }));
     p.catch(() => cache.delete(key));
     cache.set(key, p);
   }

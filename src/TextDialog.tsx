@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { textOf } from './pdfStore';
 import { Dialog } from './Dialog';
 import type { TextEl } from './doc';
 import { placeText } from './layout';
@@ -10,12 +11,14 @@ const d = (line: [number, number][]) => line.map(([x, y], i) => `${i ? 'L' : 'M'
 
 /** Edit a block of text with a live picture of how the pen will draw it, patent fields to drop in, and a warning for what the font cannot draw. */
 export function TextDialog({ el, onClose }: { el: TextEl; onClose: () => void }) {
-  const { doc, patent, updateEl } = useStore();
+  const { doc, code, updateEl } = useStore();
   const [text, setText] = useState(el.text);
   const [sizeMm, setSize] = useState(el.sizeMm);
   const [w, setW] = useState(el.w);
   const [align, setAlign] = useState(el.align);
-  const [claim, setClaim] = useState(1);
+  const [from, setFrom] = useState(doc.sources[0]?.id ?? '');
+  const [fromPage, setFromPage] = useState(1);
+  const [note, setNote] = useState<string | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
 
   const pen = doc.pens[el.pen] ?? doc.pens[0]!;
@@ -29,9 +32,16 @@ export function TextDialog({ el, onClose }: { el: TextEl; onClose: () => void })
     setText(text.slice(0, from) + s + text.slice(to));
     requestAnimationFrame(() => { a?.focus(); a?.setSelectionRange(from + s.length, from + s.length); });
   };
-  const fields = patent
-    ? ([['Title', patent.title], ['Number', patent.id], ['Granted', patent.issued], ['Filed', patent.filed], ['Inventors', patent.inventors.join(', ')], ['Assignee', patent.assignee], ['Abstract', patent.abstract]] as const).filter(([, v]) => v)
-    : [];
+  const source = doc.sources.find((x) => x.id === from);
+  /** Put the text of a page of an uploaded PDF at the cursor. */
+  const insertPage = async () => {
+    if (!code || !source) return;
+    setNote('Reading the page…');
+    try {
+      const t = await textOf(code, source.id, fromPage - 1);
+      if (t) { insert(t); setNote(null); } else setNote('That page has no text: a scanned drawing sheet is only a picture.');
+    } catch (e) { setNote((e as Error).message); }
+  };
   const apply = () => { updateEl(el.id, { text, sizeMm, w, align }); onClose(); };
 
   return (
@@ -41,16 +51,15 @@ export function TextDialog({ el, onClose }: { el: TextEl; onClose: () => void })
         <div className="hint">{text.length.toLocaleString()} characters · {preview.lines.length.toLocaleString()} pen strokes · a blank line starts a new paragraph</div>
         {missing.length > 0 && <p className="warn" role="status">The pen font cannot draw {missing.map((c) => `“${c}”`).join(' ')}; {missing.length === 1 ? 'it' : 'they'} will be left out.</p>}
 
-        {fields.length > 0 && (
-          <div className="tools" role="group" aria-label="Insert from the patent">
-            <span className="lab">Insert from the patent, at the cursor</span>
-            {fields.map(([label, value]) => <button key={label} onClick={() => insert(value)} title={value.slice(0, 120)}>{label}</button>)}
-            {!!patent?.claims.length && (
-              <>
-                <input type="number" min={1} max={patent.claims.length} value={claim} onChange={(e) => setClaim(Math.min(patent.claims.length, Math.max(1, +e.target.value || 1)))} aria-label="Claim number" />
-                <button onClick={() => insert(patent.claims[claim - 1]!)}>Claim {claim}</button>
-              </>
-            )}
+        {doc.sources.length > 0 && (
+          <div className="tools" role="group" aria-label="Insert text from a PDF page">
+            <span className="lab">Insert the text of a PDF page, at the cursor (the patent office's own pages: title, abstract, claims)</span>
+            <select value={from} onChange={(e) => { setFrom(e.target.value); setFromPage(1); }} aria-label="PDF">
+              {doc.sources.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            <input type="number" min={1} max={source?.pages ?? 1} value={fromPage} onChange={(e) => setFromPage(Math.min(source?.pages ?? 1, Math.max(1, +e.target.value || 1)))} aria-label="Page number" />
+            <button onClick={() => void insertPage()}>Insert page {fromPage}</button>
+            {note && <span className="hint">{note}</span>}
           </div>
         )}
 

@@ -4,22 +4,14 @@ import { edgeLines } from '../outline/contours';
 import type { VectorizeRequest, VectorizeResponse } from './protocol';
 import type { XY } from '../vector/simplify';
 
-/** Decode, crop, vectorize: all off the page's thread, since a full sheet is millions of pixels. */
-async function run(req: VectorizeRequest): Promise<VectorizeResponse> {
-  const res = await fetch(`/api/img?u=${encodeURIComponent(req.url)}`);
-  if (!res.ok) return { id: req.id, ok: false, error: `could not get the drawing (${res.status})` };
-  const bmp = await createImageBitmap(await res.blob());
+/** Crop and vectorize a sheet's pixels, off the page's thread: a full sheet is millions of pixels. */
+function run(req: VectorizeRequest): VectorizeResponse {
   const [t, r, b, l] = req.crop;
-  const sx = Math.round(bmp.width * l), sy = Math.round(bmp.height * t);
-  const w = Math.max(1, Math.round(bmp.width * (1 - l - r))), h = Math.max(1, Math.round(bmp.height * (1 - t - b)));
-  const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, w, h);
-  ctx.drawImage(bmp, sx, sy, w, h, 0, 0, w, h);
-  const rgba = ctx.getImageData(0, 0, w, h).data;
+  const sx = Math.round(req.w * l), sy = Math.round(req.h * t);
+  const w = Math.max(1, Math.min(req.w - sx, Math.round(req.w * (1 - l - r))));
+  const h = Math.max(1, Math.min(req.h - sy, Math.round(req.h * (1 - t - b))));
   const gray = new Uint8Array(w * h);
-  for (let i = 0; i < gray.length; i++) gray[i] = (rgba[i * 4]! * 0.299 + rgba[i * 4 + 1]! * 0.587 + rgba[i * 4 + 2]! * 0.114) | 0;
+  for (let y = 0; y < h; y++) gray.set(req.gray.subarray((sy + y) * req.w + sx, (sy + y) * req.w + sx + w), y * w);
   let lines: XY[][];
   if (req.method === 'edges') {
     const luma = new Float32Array(gray.length);
@@ -32,8 +24,9 @@ async function run(req: VectorizeRequest): Promise<VectorizeResponse> {
 }
 
 self.onmessage = (e: MessageEvent<VectorizeRequest>) => {
-  run(e.data).then(
-    (out) => self.postMessage(out),
-    (err) => self.postMessage({ id: e.data.id, ok: false, error: String(err?.message ?? err) } satisfies VectorizeResponse),
-  );
+  try {
+    self.postMessage(run(e.data));
+  } catch (err) {
+    self.postMessage({ id: e.data.id, ok: false, error: String((err as Error)?.message ?? err) } satisfies VectorizeResponse);
+  }
 };

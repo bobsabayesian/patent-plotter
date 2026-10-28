@@ -8,16 +8,17 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "relay": "node relay/relay.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "d3-contour": "^4.0.2",
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.13",
     "@types/d3-contour": "^3.0.6",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",

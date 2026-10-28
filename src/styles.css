@@ -50,7 +50,7 @@ button.danger { color: var(--danger); }
 .sheets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .sheet { padding: 0; position: relative; aspect-ratio: 3 / 4; overflow: hidden; background: #fff; }
 .sheet img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.sheet span { position: absolute; left: 3px; bottom: 2px; font-size: 11px; background: rgba(255, 255, 255, 0.85); color: #222; padding: 0 4px; border-radius: 3px; }
+.sheet .n { position: absolute; left: 3px; bottom: 2px; font-size: 11px; background: rgba(255, 255, 255, 0.85); color: #222; padding: 0 4px; border-radius: 3px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .pen { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
 .pen .n { width: 16px; color: var(--muted); font-size: 12px; text-align: center; }
@@ -121,3 +121,12 @@ label.check { flex-direction: row; align-items: center; gap: 6px; margin: 6px 0;
 .crop-rect { position: absolute; outline: 2px solid var(--accent); cursor: move; }
 .crop-handle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--paper); border: 2px solid var(--accent); border-radius: 3px; }
 @media (hover: none) { .crop-handle { width: 22px; height: 22px; margin: -11px 0 0 -11px; } }
+
+.panel.over { outline: 3px dashed var(--accent); outline-offset: -6px; }
+.source { margin: 10px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.source .row { margin: 0 0 4px; flex-wrap: nowrap; }
+.source strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet button:first-child { width: 100%; height: 100%; padding: 0; background: #fff; }
+.sheet .ph { display: block; width: 100%; height: 100%; }
+.sheet .n { z-index: 1; pointer-events: none; }
+.sheet .aa { position: absolute; right: 3px; bottom: 2px; padding: 0 5px; font-size: 11px; line-height: 16px; background: rgba(255, 255, 255, 0.9); color: #222; border-radius: 3px; border-color: #bbb; }

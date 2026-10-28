@@ -1,14 +1,14 @@
 import { create } from 'zustand';
-import { emptyDoc, newPen, pageMm, reviveDoc, type Doc, type El, type FigureEl, type PenDef, type TextEl } from './doc';
+import { emptyDoc, newPen, pageMm, reviveDoc, type Doc, type El, type FigureEl, type PenDef, type Source, type TextEl } from './doc';
+import { MAX_PDF_BYTES, looksLikePdf } from '../worker/pdfs.ts';
+import { forget, getDoc, hold, textOf } from './pdfStore';
 import { loadSession, newSessionCode, remember, rememberedCode, saveSession, cleanCode } from './session';
-import type { PatentRecord } from '../worker/patents';
 
 export type Save = 'idle' | 'saving' | 'saved' | 'error';
 
 interface State {
   doc: Doc;
   code: string | null;
-  patent: PatentRecord | null;
   selected: string | null;
   busy: string | null;
   error: string | null;
@@ -21,14 +21,16 @@ interface State {
 
   boot(): Promise<void>;
   openSession(code: string): Promise<void>;
-  loadPatent(number: string): Promise<void>;
+  addPdf(file: File): Promise<void>;
+  removeSource(id: string): void;
+  addTextFromPage(src: string, page: number): Promise<void>;
   patch(fn: (d: Doc) => Doc): void;
   undo(): void;
   redo(): void;
   duplicateEl(id: string): void;
   select(id: string | null): void;
   setEditing(e: State['editing']): void;
-  addFigure(sheet: number): void;
+  addFigure(src: string, page: number): void;
   addText(label: string, text: string, sizeMm?: number): void;
   updateEl(id: string, change: Partial<FigureEl> | Partial<TextEl>): void;
   removeEl(id: string): void;
@@ -70,15 +72,8 @@ export const useStore = create<State>((set, get) => {
     scheduleSave();
   };
 
-  const fetchPatent = async (id: string): Promise<PatentRecord> => {
-    const r = await fetch(`/api/patent/${encodeURIComponent(id)}`);
-    const body = await r.json();
-    if (!r.ok) throw new Error(body.error ?? `could not get that patent (${r.status})`);
-    return body as PatentRecord;
-  };
-
   return {
-    doc: emptyDoc(), code: null, patent: null, selected: null, busy: null, error: null, save: 'idle', editing: null, past: [], future: [],
+    doc: emptyDoc(), code: null, selected: null, busy: null, error: null, save: 'idle', editing: null, past: [], future: [],
 
     async boot() {
       set({ busy: 'Starting…' });
@@ -99,23 +94,52 @@ export const useStore = create<State>((set, get) => {
         const saved = await loadSession(code);
         const doc = saved ? reviveDoc(saved) : emptyDoc();
         remember(code);
-        set({ code, doc, patent: null, selected: null, save: saved ? 'saved' : 'idle', editing: null, past: [], future: [] });
-        if (doc.patent) set({ patent: await fetchPatent(doc.patent) });
+        set({ code, doc, selected: null, save: saved ? 'saved' : 'idle', editing: null, past: [], future: [] });
         set({ busy: null });
       } catch (e) { set({ busy: null, error: (e as Error).message }); }
     },
 
-    async loadPatent(number) {
-      set({ busy: 'Fetching patent…', error: null });
+    async addPdf(file) {
+      const code = get().code;
+      if (!code) { set({ error: 'The session is not ready yet; try again in a moment.' }); return; }
+      if (file.size > MAX_PDF_BYTES) { set({ error: `That file is ${(file.size / 1048576).toFixed(0)} MB; a PDF can be at most ${MAX_PDF_BYTES / 1048576} MB.` }); return; }
+      set({ busy: `Reading ${file.name}…`, error: null });
+      let id = '';
       try {
-        const rec = await fetchPatent(number);
-        const fresh = get().doc.patent !== rec.id;
-        set({ patent: rec, busy: null });
-        edit((d) => ({ ...d, patent: rec.id, elements: fresh ? [] : d.elements }));
-        if (fresh) {
-          if (rec.drawings.length) get().addFigure(0);
-          get().addText('Title', rec.title, 6);
-        }
+        const data = new Uint8Array(await file.arrayBuffer());
+        if (!looksLikePdf(data)) throw new Error(`${file.name} is not a PDF.`);
+        id = [...crypto.getRandomValues(new Uint8Array(4))].map((b) => b.toString(16).padStart(2, '0')).join('');
+        hold(id, data);
+        const pages = (await getDoc(code, id)).numPages;
+        set({ busy: `Uploading ${file.name}…` });
+        const r = await fetch(`/api/session/${code}/pdf/${id}`, { method: 'PUT', headers: { 'content-type': 'application/pdf' }, body: data });
+        if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? `Could not upload the PDF (${r.status}).`);
+        const source: Source = { id, name: file.name.replace(/\.pdf$/i, '').slice(0, 100) || 'PDF', pages };
+        edit((d) => ({ ...d, sources: [...d.sources, source] }));
+        set({ busy: null });
+      } catch (e) {
+        if (id) forget(id);
+        set({ busy: null, error: (e as Error).message });
+      }
+    },
+
+    removeSource(id) {
+      forget(id);
+      edit((d) => ({ ...d, sources: d.sources.filter((s) => s.id !== id), elements: d.elements.filter((e) => e.kind !== 'figure' || e.src !== id) }));
+      if (!get().doc.elements.some((e) => e.id === get().selected)) set({ selected: null });
+    },
+
+    async addTextFromPage(src, page) {
+      const code = get().code;
+      if (!code) return;
+      set({ busy: 'Reading the page…', error: null });
+      try {
+        const text = await textOf(code, src, page);
+        set({ busy: null });
+        if (!text) { set({ error: 'That page has no text to take (a scanned drawing sheet has only its picture).' }); return; }
+        const name = get().doc.sources.find((s) => s.id === src)?.name ?? 'PDF';
+        get().addText(`${name}, page ${page + 1}`, text, 2.6);
+        set({ editing: { kind: 'text', id: get().selected! } });
       } catch (e) { set({ busy: null, error: (e as Error).message }); }
     },
 
@@ -144,9 +168,9 @@ export const useStore = create<State>((set, get) => {
     select: (id) => set({ selected: id }),
     setEditing: (editing) => set({ editing }),
 
-    addFigure(sheet) {
-      const d = get().doc, page = pageMm(d), inner = page.w - 2 * d.marginMm;
-      const el: FigureEl = { id: elId(), kind: 'figure', sheet, pen: 0, x: d.marginMm, y: d.marginMm, w: inner, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true, rot: 0 };
+    addFigure(src, page) {
+      const d = get().doc, sheet = pageMm(d), inner = sheet.w - 2 * d.marginMm;
+      const el: FigureEl = { id: elId(), kind: 'figure', src, page, pen: 0, x: d.marginMm, y: d.marginMm, w: inner, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true, rot: 0 };
       edit((d) => ({ ...d, elements: [...d.elements, el] }));
       set({ selected: el.id });
     },

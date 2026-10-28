@@ -98,7 +98,7 @@ describe('rotation', () => {
   });
   it('sizes a rotated drawing by its turned width', () => {
     const v = { lines: [[[0, 0], [200, 100]] as [number, number][]], width: 300, height: 300 };
-    const fig = (rot: FigureEl['rot']): FigureEl => ({ id: 'f', kind: 'figure', sheet: 0, pen: 0, x: 5, y: 5, w: 50, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true, rot });
+    const fig = (rot: FigureEl['rot']): FigureEl => ({ id: 'f', kind: 'figure', src: 'a1b2c3d4', page: 0, pen: 0, x: 5, y: 5, w: 50, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true, rot });
     expect(placeFigure(fig(0), v).box).toEqual([5, 5, 50, 25]);
     expect(placeFigure(fig(1), v).box).toEqual([5, 5, 50, 100]); // turned: 100 wide by 200 tall, scaled to 50 wide
   });
@@ -106,7 +106,7 @@ describe('rotation', () => {
 
 describe('saved sessions', () => {
   it('give older elements a turn of 0 and left-aligned text', () => {
-    const d = reviveDoc({ elements: [{ id: 'a', kind: 'figure', sheet: 0, x: 1, y: 2, w: 3 }, { id: 'b', kind: 'text', text: 'x', x: 1, y: 2, w: 3, rot: 7, align: 'weird' }] });
+    const d = reviveDoc({ sources: [{ id: 'a1b2c3d4', name: 'US261', pages: 4 }], elements: [{ id: 'a', kind: 'figure', src: 'a1b2c3d4', page: 0, x: 1, y: 2, w: 3 }, { id: 'b', kind: 'text', text: 'x', x: 1, y: 2, w: 3, rot: 7, align: 'weird' }] });
     expect(d.elements[0]).toMatchObject({ rot: 0 });
     expect(d.elements[1]).toMatchObject({ rot: 3, align: 'left' });
   });

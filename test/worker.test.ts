@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { handleApi } from '../worker/api';
+import { MAX_PDF_BYTES, looksLikePdf } from '../worker/pdfs';
 import { cleanCode, newCode, CODE_ALPHABET } from '../worker/sessions';
-import { normalizeNumber, parsePatentPage, relayFetcher } from '../worker/patents.ts';
-import { buildQuery, parseSearch } from '../worker/search.ts';
 import type { Store } from '../worker/store';
 
 const memory = () => {
@@ -11,50 +9,6 @@ const memory = () => {
   const store: Store = { get: async (k) => m.get(k) ?? null, put: async (k, body, type) => { m.set(k, { body, type }); } };
   return { m, store };
 };
-const page = readFileSync(new URL('./fixtures/us7654321.html', import.meta.url), 'utf8');
-
-describe('patent numbers', () => {
-  it('accepts the usual ways of writing one', () => {
-    expect(normalizeNumber('7,654,321')).toBe('US7654321');
-    expect(normalizeNumber('US 7654321 B2')).toBe('US7654321B2');
-    expect(normalizeNumber('us7654321b2')).toBe('US7654321B2');
-    expect(normalizeNumber('D654,321')).toBe('USD654321');
-    expect(normalizeNumber('RE39,000')).toBe('USRE39000');
-  });
-  it('accepts historic numbers: short ones and the pre-1836 X patents', () => {
-    expect(normalizeNumber('261')).toBe('US261');
-    expect(normalizeNumber('US261A')).toBe('US261A');
-    expect(normalizeNumber('416,697')).toBe('US416697');
-    expect(normalizeNumber('X8803')).toBe('USX8803');
-    expect(normalizeNumber('USX8803I1')).toBe('USX8803I1');
-  });
-  it('rejects what is not a US patent number', () => {
-    for (const bad of ['', 'abc', 'EP1234567', '../../etc', 'US7654321B2/../x']) expect(normalizeNumber(bad)).toBeNull();
-  });
-});
-
-describe('parsePatentPage', () => {
-  const rec = parsePatentPage(page, 'US7654321B2');
-  it('reads the title, people and dates', () => {
-    expect(rec.title).toBe('Formation fluid sampling apparatus and methods');
-    expect(rec.inventors).toContain('Colin Longfield');
-    expect(rec.assignee).toBe('Schlumberger Technology Corp');
-    expect(rec.filed).toBe('2006-12-27');
-    expect(rec.issued).toBe('2010-02-02');
-  });
-  it('reads the abstract and claims as plain text', () => {
-    expect(rec.abstract.startsWith('A fluid sampling system retrieves a formation fluid sample')).toBe(true);
-    expect(rec.abstract).not.toMatch(/[<>]/);
-    expect(rec.claims.length).toBeGreaterThanOrEqual(5);
-    expect(rec.claims[0]).toMatch(/^1\. A fluid sampling system/);
-  });
-  it('lists the drawing sheets once each, without the front page', () => {
-    expect(rec.drawings.length).toBeGreaterThan(3);
-    expect(new Set(rec.drawings).size).toBe(rec.drawings.length);
-    expect(rec.drawings.every((u) => u.startsWith('https://patentimages.storage.googleapis.com/') && !/D0*0\.png$/.test(u))).toBe(true);
-    expect(rec.drawings[0]).toMatch(/D00001\.png$/);
-  });
-});
 
 describe('sessions', () => {
   it('makes codes people can read aloud, and cleans what they type', () => {
@@ -87,170 +41,52 @@ describe('sessions', () => {
   });
 });
 
-describe('patent api', () => {
-  it('fetches a patent once and then serves it from the bucket', async () => {
-    const { store } = memory();
-    let calls = 0;
-    const doFetch = async (u: string) => { calls++; expect(u).toBe('https://patents.google.com/patent/US7654321B2/en'); return new Response(page); };
-    const r1 = await handleApi(new Request('http://x/api/patent/7,654,321B2'), store, doFetch);
-    expect(r1!.status).toBe(200);
-    expect(((await r1!.json()) as { title: string }).title).toMatch(/Formation fluid/);
-    await handleApi(new Request('http://x/api/patent/US7654321B2'), store, doFetch);
-    expect(calls).toBe(1);
-  });
-  it('says so when there is no such patent', async () => {
-    const { store } = memory();
-    const r = await handleApi(new Request('http://x/api/patent/US9999999'), store, async () => new Response('nope', { status: 404 }));
-    expect(r!.status).toBe(404);
-    expect((await handleApi(new Request('http://x/api/patent/hello'), store))!.status).toBe(400);
-  });
-  it('says the source refused, rather than "no such patent", when it is blocked', async () => {
-    const { store } = memory();
-    const r = await handleApi(new Request('http://x/api/patent/US7654321B2'), store, async () => new Response('unusual traffic', { status: 503 }));
-    expect(r!.status).toBe(502);
-    expect(((await r!.json()) as { error: string }).error).toMatch(/refused.*503/);
-  });
-  it('only proxies drawings from the patent image host', async () => {
-    const { store } = memory();
-    const doFetch = async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } });
-    for (const bad of ['https://evil.example/a.png', 'http://patentimages.storage.googleapis.com/a.png', 'https://patentimages.storage.googleapis.com.evil.example/a.png', 'nonsense'])
-      expect((await handleApi(new Request(`http://x/api/img?u=${encodeURIComponent(bad)}`), store, doFetch))!.status).toBe(400);
-    const ok = await handleApi(new Request(`http://x/api/img?u=${encodeURIComponent('https://patentimages.storage.googleapis.com/a/b.png')}`), store, doFetch);
-    expect(ok!.status).toBe(200);
-    expect(ok!.headers.get('content-type')).toBe('image/png');
-  });
-});
+const PDF = new TextEncoder().encode('%PDF-1.3\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF');
+const put = (code: string, id: string, body: BodyInit, type = 'application/pdf') => new Request(`http://x/api/session/${code}/pdf/${id}`, { method: 'PUT', body, headers: { 'content-type': type } });
 
-describe('search', () => {
-  const q = (o: Record<string, string>) => buildQuery(new URLSearchParams(o), 2026);
-  it('builds the query Google takes, with dates as publication years', () => {
-    expect(q({ q: 'steam engine', from: '1850', to: '1899', sort: 'old', page: '2' })).toEqual({ inner: 'q=steam%20engine&country=US&type=PATENT&after=publication:18500101&before=publication:18991231&sort=old&page=2' });
-    expect(q({ q: 'a&b=c' })).toEqual({ inner: 'q=a%26b%3Dc&country=US&type=PATENT' }); // the text cannot add parameters of its own
+describe('uploaded PDFs', () => {
+  const code = 'K7M2P-9QXAR';
+  it('recognises a PDF by its header, even with a little in front of it', () => {
+    expect(looksLikePdf(PDF)).toBe(true);
+    expect(looksLikePdf(new TextEncoder().encode('\n\n  %PDF-1.7 rest'))).toBe(true);
+    expect(looksLikePdf(new TextEncoder().encode('<html>not a pdf</html>'))).toBe(false);
+    expect(looksLikePdf(new Uint8Array())).toBe(false);
   });
-  it('rejects empty, long and out-of-range searches', () => {
-    for (const bad of <Record<string, string>[]>[{ q: '' }, { q: 'x'.repeat(201) }, { q: 'a', from: '1700' }, { q: 'a', to: '2027' }, { q: 'a', from: '1900', to: '1800' }, { q: 'a', from: 'abc' }, { q: 'a', page: '100' }, { q: 'a', page: '-1' }])
-      expect(q(bad)).toHaveProperty('error');
-  });
-  it('turns the feed into hits', () => {
-    const feed = { results: { total_num_results: 1010, total_num_pages: 101, cluster: [{ result: [
-      { patent: { title: ' <b>Bicycle</b>-step ', snippet: 'a &quot;step&quot; for <b>bicycles</b> &hellip;', grant_date: '1889-12-03', publication_number: 'US416541A', inventor: 'J. Smith', assignee: '', thumbnail: '79/78/16/x/US416541-drawings-page-1.png' } },
-      { patent: { title: '', publication_number: 'US2A' } },
-      { patent: {} },
-    ] }] } };
-    const r = parseSearch(feed, 0);
-    expect(r).toMatchObject({ total: 1010, pages: 100, page: 0 });
-    expect(r.hits).toHaveLength(2);
-    expect(r.hits[0]).toEqual({ id: 'US416541A', title: 'Bicycle -step', snippet: 'a "step" for bicycles …', date: '1889-12-03', inventor: 'J. Smith', assignee: '', thumb: 'https://patentimages.storage.googleapis.com/79/78/16/x/US416541-drawings-page-1.png' });
-    expect(r.hits[1]!.title).toBe('(untitled)');
-    expect(parseSearch({}, 3)).toEqual({ total: 0, pages: 1, page: 3, hits: [] });
-  });
-  it('asks Google once and passes errors on politely', async () => {
-    const { store } = memory();
-    let asked = '';
-    const ok = await handleApi(new Request('http://x/api/search?q=telephone&to=1900'), store, async (u) => { asked = u; return new Response(JSON.stringify({ results: { cluster: [{ result: [] }] } })); });
-    expect(ok!.status).toBe(200);
-    expect(decodeURIComponent(asked)).toContain('before=publication:19001231');
-    expect((await handleApi(new Request('http://x/api/search?q=a'), store, async () => new Response('', { status: 429 })))!.status).toBe(502);
-    expect((await handleApi(new Request('http://x/api/search'), store))!.status).toBe(400);
-  });
-});
-
-describe('relay fetcher', () => {
-  const calls: { url: string; headers?: HeadersInit }[] = [];
-  const direct = async (url: string, init?: RequestInit) => { calls.push({ url, headers: init?.headers }); return new Response('ok'); };
-  it('sends Google Patents calls through the relay, with the key, and everything else straight out', async () => {
-    const f = relayFetcher('https://relay.example/', 'secret', direct);
-    await f('https://patents.google.com/patent/US261A/en', { headers: { 'user-agent': 'x' } });
-    await f('https://patentimages.storage.googleapis.com/a.png');
-    expect(calls[0]).toEqual({ url: 'https://relay.example/fetch?u=https%3A%2F%2Fpatents.google.com%2Fpatent%2FUS261A%2Fen', headers: { 'x-relay-key': 'secret' } });
-    expect(calls[1]!.url).toBe('https://patentimages.storage.googleapis.com/a.png');
-  });
-  it('goes direct when no relay is set up', () => {
-    expect(relayFetcher(undefined, undefined, direct)).toBe(direct);
-    expect(relayFetcher('https://relay.example', undefined, direct)).toBe(direct);
-  });
-});
-
-describe('search keeping and failure', () => {
-  const feed = (title: string) => JSON.stringify({ results: { total_num_results: 1, total_num_pages: 1, cluster: [{ result: [{ patent: { title, publication_number: 'US1A' } }] }] } });
-  const ask = (store: Store, doFetch: (u: string) => Promise<Response>) => handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch as never);
-
-  it('keeps a search and does not ask again within a week', async () => {
+  it('keeps an upload under the session, and gives the same bytes back', async () => {
     const { m, store } = memory();
-    let asked = 0;
-    const doFetch = async () => { asked++; return new Response(feed('First')); };
-    await ask(store, doFetch);
-    const again = await ask(store, doFetch);
-    expect(asked).toBe(1);
-    expect(((await again!.json()) as { hits: { title: string }[] }).hits[0]!.title).toBe('First');
-    expect([...m.keys()].every((k) => k.startsWith('patent-plotter/search/'))).toBe(true);
+    expect((await handleApi(put(code, 'a1b2c3d4', PDF), store))!.status).toBe(200);
+    expect([...m.keys()]).toEqual([`patent-plotter/pdfs/${code}/a1b2c3d4.pdf`]);
+    const got = await handleApi(new Request(`http://x/api/session/${code.replace('-', '').toLowerCase()}/pdf/a1b2c3d4`), store);
+    expect(got!.status).toBe(200);
+    expect(got!.headers.get('content-type')).toBe('application/pdf');
+    expect(new Uint8Array(await got!.arrayBuffer())).toEqual(PDF);
   });
-  it('uses an old kept search when the source is down, and says so when there is none', async () => {
-    const { m, store } = memory();
-    await ask(store, async () => new Response(feed('Old')));
-    const [key, val] = [...m.entries()][0]!;
-    m.set(key, { ...val, body: new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(val.body)), cachedAt: 0 })).buffer as ArrayBuffer }); // a long time ago
-    const down = await ask(store, async () => { throw new Error('tunnel down'); });
-    expect(down!.status).toBe(200);
-    expect(((await down!.json()) as { hits: { title: string }[] }).hits[0]!.title).toBe('Old');
-
-    const empty = memory();
-    const none = await ask(empty.store, async () => { throw new Error('tunnel down'); });
-    expect(none!.status).toBe(502);
-    expect(((await none!.json()) as { error: string }).error).toMatch(/could not reach/);
-    expect(empty.m.size).toBe(0); // a failure is not kept
-  });
-  it('says the source could not be reached when a patent page lookup cannot connect', async () => {
+  it('keeps each session\'s PDFs apart', async () => {
     const { store } = memory();
-    const r = await handleApi(new Request('http://x/api/patent/US261A'), store, async () => { throw new Error('tunnel down'); });
-    expect(r!.status).toBe(502);
-    expect(((await r!.json()) as { error: string }).error).toMatch(/could not reach/);
+    await handleApi(put(code, 'a1b2c3d4', PDF), store);
+    expect((await handleApi(new Request('http://x/api/session/22222-33333/pdf/a1b2c3d4'), store))!.status).toBe(404);
+    expect((await handleApi(new Request(`http://x/api/session/${code}/pdf/ffffffff`), store))!.status).toBe(404);
+  });
+  it('refuses what is not a PDF, is empty, is too big, or has a bad code or id', async () => {
+    const { m, store } = memory();
+    expect((await handleApi(put(code, 'a1b2c3d4', '<html>hi</html>'), store))!.status).toBe(415);
+    expect((await handleApi(put(code, 'a1b2c3d4', new Uint8Array()), store))!.status).toBe(400);
+    const big = new Uint8Array(MAX_PDF_BYTES + 1); big.set(PDF);
+    expect((await handleApi(put(code, 'a1b2c3d4', big), store))!.status).toBe(413);
+    expect((await handleApi(put('nope', 'a1b2c3d4', PDF), store))!.status).toBe(400);
+    for (const id of ['short', 'A1B2C3D4', '../../etc', 'a1b2c3d4e5']) expect((await handleApi(put(code, id, PDF), store))!.status, id).toBe(400);
+    expect(m.size).toBe(0);
+  });
+  it('does not take other methods', async () => {
+    const { store } = memory();
+    expect((await handleApi(new Request(`http://x/api/session/${code}/pdf/a1b2c3d4`, { method: 'DELETE' }), store))!.status).toBe(405);
   });
 });
 
-describe('per-visitor limit', () => {
-  const never = async () => false;
-  const feed = JSON.stringify({ results: { cluster: [{ result: [{ patent: { title: 'T', publication_number: 'US1A' } }] }] } });
-  it('stops lookups that would go out to Google, but not answers already kept', async () => {
+describe('the Google fetching is gone', () => {
+  it('has no search or patent lookup', async () => {
     const { store } = memory();
-    let asked = 0;
-    const doFetch = async () => { asked++; return new Response(feed); };
-    const blocked = await handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch, never);
-    expect(blocked!.status).toBe(429);
-    expect(asked).toBe(0);
-    expect((await handleApi(new Request('http://x/api/patent/US7654321B2'), store, doFetch, never))!.status).toBe(429);
-    expect(asked).toBe(0);
-    await handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch); // allowed once, so it is kept
-    expect((await handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch, never))!.status).toBe(200);
-    expect(asked).toBe(1);
-  });
-});
-
-describe('when the relay says Google is limiting it', () => {
-  const blocked = async () => new Response('{"error":"google is limiting this connection"}', { status: 503, headers: { 'x-relay-blocked': '1' } });
-  it('tells the visitor what is going on, for a search and for a patent', async () => {
-    const { store } = memory();
-    const s = await handleApi(new Request('http://x/api/search?q=telephone'), store, blocked);
-    expect(s!.status).toBe(503);
-    expect(((await s!.json()) as { error: string }).error).toMatch(/limiting the relay.*already loaded still work/);
-    const p = await handleApi(new Request('http://x/api/patent/US7654321B2'), store, blocked);
-    expect(p!.status).toBe(503);
-    expect(((await p!.json()) as { error: string }).error).toMatch(/limiting the relay/);
-  });
-  it('still serves a search it kept, while blocked', async () => {
-    const { m, store } = memory();
-    const feed = JSON.stringify({ results: { cluster: [{ result: [{ patent: { title: 'Kept', publication_number: 'US1A' } }] }] } });
-    await handleApi(new Request('http://x/api/search?q=telephone'), store, async () => new Response(feed));
-    const [key, val] = [...m.entries()][0]!;
-    m.set(key, { ...val, body: new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(val.body)), cachedAt: 0 })).buffer as ArrayBuffer });
-    const r = await handleApi(new Request('http://x/api/search?q=telephone'), store, blocked);
-    expect(r!.status).toBe(200);
-    expect(((await r!.json()) as { hits: { title: string }[] }).hits[0]!.title).toBe('Kept');
-  });
-  it('does not mistake a plain 503 for the relay being blocked', async () => {
-    const { store } = memory();
-    const r = await handleApi(new Request('http://x/api/search?q=telephone'), store, async () => new Response('', { status: 503 }));
-    expect(r!.status).toBe(502);
-    expect(((await r!.json()) as { error: string }).error).toMatch(/said 503/);
+    expect((await handleApi(new Request('http://x/api/search?q=telephone'), store))!.status).toBe(404);
+    expect((await handleApi(new Request('http://x/api/patent/US7654321B2'), store))!.status).toBe(404);
   });
 });

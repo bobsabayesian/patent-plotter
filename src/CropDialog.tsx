@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cropFromRect, drawRect, inkBounds, isWhole, moveRect, rectFromCrop, resizeRect, type CropHandle, type Rect } from './crop';
 import { Dialog } from './Dialog';
 import type { FigureEl } from './doc';
+import { pagePng } from './pdfStore';
 import { useStore } from './store';
 
 const HANDLES: { h: CropHandle; style: React.CSSProperties; cursor: string }[] = [
@@ -15,8 +16,15 @@ type Drag = { mode: 'draw' | 'move' | 'resize'; anchor: { x: number; y: number }
 
 /** Crop a drawing sheet by dragging a rectangle on the sheet itself (draw a new one, drag its edges, or drag it along). */
 export function CropDialog({ el, onClose }: { el: FigureEl; onClose: () => void }) {
-  const { patent, updateEl } = useStore();
-  const url = patent?.drawings[el.sheet];
+  const { code, doc, updateEl } = useStore();
+  const source = doc.sources.find((s) => s.id === el.src);
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (code) pagePng(code, el.src, el.page, 1400).then((u) => { if (live) setUrl(u); }, (e: Error) => { if (live) setFailed(e.message); });
+    return () => { live = false; };
+  }, [code, el.src, el.page]);
   const [rect, setRect] = useState<Rect>(rectFromCrop(el.crop));
   const [note, setNote] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -67,13 +75,13 @@ export function CropDialog({ el, onClose }: { el: FigureEl; onClose: () => void 
   const [x0, y0, x1, y1] = rect;
 
   return (
-    <Dialog title={`Crop sheet ${el.sheet + 1}`} onClose={onClose}>
+    <Dialog title={`Crop page ${el.page + 1}${source ? ` of ${source.name}` : ''}`} onClose={onClose}>
       <div className="dlg-body">
         <p className="hint">Drag on the sheet to choose the part to draw, or drag the box and its handles. Use it to pick one figure, or to cut off the page header.</p>
-        {!url ? <p className="err">This patent has no drawing sheet {el.sheet + 1}.</p> : (
+        {failed ? <p className="err">{failed}</p> : !url ? <p className="hint">Reading the page…</p> : (
           <div className="crop-stage">
             <div ref={box} className="crop-box" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
-              <img ref={img} src={`/api/img?u=${encodeURIComponent(url)}`} alt={`Drawing sheet ${el.sheet + 1}`} draggable={false} />
+              <img ref={img} src={url} alt={`Page ${el.page + 1}`} draggable={false} />
               <div className="shade" style={{ left: 0, top: 0, width: '100%', height: pct(y0) }} />
               <div className="shade" style={{ left: 0, top: pct(y1), width: '100%', height: pct(1 - y1) }} />
               <div className="shade" style={{ left: 0, top: pct(y0), width: pct(x0), height: pct(y1 - y0) }} />

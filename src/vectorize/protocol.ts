@@ -4,7 +4,10 @@ export type Method = 'lineart' | 'edges';
 
 export interface VectorizeRequest {
   id: number;
-  url: string;
+  /** the sheet as grey pixels (0 black .. 255 white), `w` x `h` */
+  gray: Uint8Array;
+  w: number;
+  h: number;
   method: Method;
   /** fractions of the sheet to trim off: top, right, bottom, left */
   crop: [number, number, number, number];
