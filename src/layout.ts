@@ -29,15 +29,34 @@ export function wrap(text: string, maxUnits: number): string[] {
 
 export interface Placed { lines: Line[]; /** where it ends up, mm: x, y, width, height */ box: [number, number, number, number] }
 
+/** Lines in their own corner-at-the-origin frame, with the size of the frame. */
+interface Local { lines: Line[]; w: number; h: number }
+
+/** Turn a frame `k` quarter turns clockwise (page y runs down), so the top-left corner of the turned frame is again the origin. */
+export function rotateLocal(l: Local, k: number): Local {
+  const q = ((k % 4) + 4) % 4;
+  if (!q) return l;
+  const map = (p: XY): XY => (q === 1 ? [l.h - p[1], p[0]] : q === 2 ? [l.w - p[0], l.h - p[1]] : [p[1], l.w - p[0]]);
+  return { lines: l.lines.map((line) => line.map(map)), w: q % 2 ? l.h : l.w, h: q % 2 ? l.w : l.h };
+}
+
+const put = (l: Local, x: number, y: number, scale = 1): Placed => ({
+  lines: l.lines.map((line) => line.map(([px, py]): XY => [x + px * scale, y + py * scale])),
+  box: [x, y, l.w * scale, l.h * scale],
+});
+
 export function placeText(el: TextEl): Placed {
   const s = el.sizeMm / CAP_UNITS;
   const rows = wrap(el.text, el.w / s);
   const lines: Line[] = [];
   rows.forEach((row, i) => {
-    const base = el.y + (CAP_UNITS + i * LINE_UNITS) * s;
-    for (const g of layoutText(row).glyphs) for (const stroke of g.strokes) lines.push(stroke.map(([gx, gy]): XY => [el.x + (g.x + gx) * s, base - gy * s]));
+    const base = (CAP_UNITS + i * LINE_UNITS) * s;
+    const laid = layoutText(row);
+    const free = el.w - laid.width * s;
+    const x0 = el.align === 'center' ? free / 2 : el.align === 'right' ? free : 0;
+    for (const g of laid.glyphs) for (const stroke of g.strokes) lines.push(stroke.map(([gx, gy]): XY => [x0 + (g.x + gx) * s, base - gy * s]));
   });
-  return { lines, box: [el.x, el.y, el.w, Math.max(1, (rows.length - 1) * LINE_UNITS * s + CAP_UNITS * s)] };
+  return put(rotateLocal({ lines, w: el.w, h: Math.max(1, (rows.length - 1) * LINE_UNITS * s + CAP_UNITS * s) }, el.rot), el.x, el.y);
 }
 
 /** The drawing's ink bounds: a sheet has white all round it, which should not count when sizing it. */
@@ -49,12 +68,12 @@ export function boundsOf(lines: Line[]): [number, number, number, number] | null
 
 export function placeFigure(el: FigureEl, v: Vectorized | undefined): Placed {
   const b = v && boundsOf(v.lines);
-  if (!v || !b || b[2] - b[0] <= 0) return { lines: [], box: [el.x, el.y, el.w, el.w * 1.3] };
-  const s = el.w / (b[2] - b[0]);
-  return {
-    lines: v.lines.map((l) => l.map(([x, y]): XY => [el.x + (x - b[0]) * s, el.y + (y - b[1]) * s])),
-    box: [el.x, el.y, el.w, (b[3] - b[1]) * s],
-  };
+  if (!v || !b || b[2] - b[0] <= 0) {
+    const square = el.rot % 2 === 1; // while it is being traced, hold a placeholder of about the right shape
+    return { lines: [], box: [el.x, el.y, el.w, square ? el.w / 1.3 : el.w * 1.3] };
+  }
+  const local = rotateLocal({ lines: v.lines.map((l) => l.map(([x, y]): XY => [x - b[0], y - b[1]])), w: b[2] - b[0], h: b[3] - b[1] }, el.rot);
+  return put(local, el.x, el.y, el.w / local.w);
 }
 
 export const placeEl = (el: El, vecs: ReadonlyMap<string, Vectorized>): Placed => (el.kind === 'text' ? placeText(el) : placeFigure(el, vecs.get(el.id)));

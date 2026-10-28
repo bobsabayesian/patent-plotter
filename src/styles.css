@@ -20,8 +20,8 @@ small { font-weight: 400; color: var(--muted); text-transform: none; letter-spac
 .panel header { margin-bottom: 8px; }
 .sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 section { padding: 12px 0; border-top: 1px solid var(--line); }
-.stage { overflow: auto; padding: 16px; position: relative; display: flex; justify-content: center; align-items: flex-start; }
-.page { max-height: calc(100dvh - 32px); max-width: 100%; width: auto; height: calc(100dvh - 32px); filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.15)); touch-action: none; }
+.stage { overflow: auto; padding: 0 16px 16px; position: relative; }
+.page { display: block; margin: 0 auto; width: auto; height: calc(100dvh - 76px); filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.15)); touch-action: none; }
 .paper { fill: var(--paper); }
 .margin { fill: none; stroke: #8a8; stroke-width: 0.3; stroke-dasharray: 2 2; }
 .hit { fill: transparent; stroke: none; cursor: grab; }
@@ -88,3 +88,14 @@ button.danger { color: var(--danger); }
 .hits small { color: var(--muted); overflow-wrap: anywhere; }
 .hits .snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 label.check { flex-direction: row; align-items: center; gap: 6px; margin: 6px 0; }
+
+.handle { fill: var(--paper); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.guide { stroke: #d6336c; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.bar { position: sticky; top: 0; z-index: 3; display: flex; gap: 6px; align-items: center; padding: 10px 0; background: var(--bg); flex-wrap: wrap; }
+.bar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.bar .zoom { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+.bar label.check { margin: 0 0 0 4px; }
+.tools { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; align-items: center; }
+.tools .lab { font-size: 11px; color: var(--muted); width: 100%; margin-top: 2px; }
+.tools button { padding: 4px 9px; min-width: 32px; }
+.tools button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }

@@ -13,11 +13,17 @@ interface State {
   busy: string | null;
   error: string | null;
   save: Save;
+  /** earlier and later states of the doc, for undo and redo */
+  past: Doc[];
+  future: Doc[];
 
   boot(): Promise<void>;
   openSession(code: string): Promise<void>;
   loadPatent(number: string): Promise<void>;
   patch(fn: (d: Doc) => Doc): void;
+  undo(): void;
+  redo(): void;
+  duplicateEl(id: string): void;
   select(id: string | null): void;
   addFigure(sheet: number): void;
   addText(label: string, text: string, sizeMm?: number): void;
@@ -45,7 +51,21 @@ export const useStore = create<State>((set, get) => {
       try { await saveSession(code, doc); set({ save: 'saved' }); } catch { set({ save: 'error' }); }
     }, 800);
   };
-  const edit = (fn: (d: Doc) => Doc) => { set((s) => ({ doc: fn(s.doc) })); scheduleSave(); };
+  /**
+   * Change the doc, remembering how it was so it can be undone. Edits made one after another with the same `key` (the
+   * many small steps of one drag, or of typing in one box) are a single undo step.
+   */
+  let lastKey = '', lastAt = 0;
+  const edit = (fn: (d: Doc) => Doc, key = '') => {
+    const now = Date.now();
+    const joined = key !== '' && key === lastKey && now - lastAt < 1000;
+    lastKey = key; lastAt = now;
+    set((s) => {
+      const doc = fn(s.doc);
+      return doc === s.doc ? {} : { doc, past: joined ? s.past : [...s.past, s.doc].slice(-100), future: [] };
+    });
+    scheduleSave();
+  };
 
   const fetchPatent = async (id: string): Promise<PatentRecord> => {
     const r = await fetch(`/api/patent/${encodeURIComponent(id)}`);
@@ -55,7 +75,7 @@ export const useStore = create<State>((set, get) => {
   };
 
   return {
-    doc: emptyDoc(), code: null, patent: null, selected: null, busy: null, error: null, save: 'idle',
+    doc: emptyDoc(), code: null, patent: null, selected: null, busy: null, error: null, save: 'idle', past: [], future: [],
 
     async boot() {
       set({ busy: 'Starting…' });
@@ -76,7 +96,7 @@ export const useStore = create<State>((set, get) => {
         const saved = await loadSession(code);
         const doc = saved ? reviveDoc(saved) : emptyDoc();
         remember(code);
-        set({ code, doc, patent: null, selected: null, save: saved ? 'saved' : 'idle' });
+        set({ code, doc, patent: null, selected: null, save: saved ? 'saved' : 'idle', past: [], future: [] });
         if (doc.patent) set({ patent: await fetchPatent(doc.patent) });
         set({ busy: null });
       } catch (e) { set({ busy: null, error: (e as Error).message }); }
@@ -96,12 +116,33 @@ export const useStore = create<State>((set, get) => {
       } catch (e) { set({ busy: null, error: (e as Error).message }); }
     },
 
-    patch: edit,
+    patch: (fn) => edit(fn),
+    undo() {
+      const { past, doc, future } = get();
+      if (!past.length) return;
+      lastKey = '';
+      set({ doc: past[past.length - 1]!, past: past.slice(0, -1), future: [doc, ...future] });
+      scheduleSave();
+    },
+    redo() {
+      const { past, doc, future } = get();
+      if (!future.length) return;
+      lastKey = '';
+      set({ doc: future[0]!, past: [...past, doc], future: future.slice(1) });
+      scheduleSave();
+    },
+    duplicateEl(id) {
+      const el = get().doc.elements.find((e) => e.id === id);
+      if (!el) return;
+      const copy: El = { ...el, id: elId(), x: el.x + 5, y: el.y + 5 };
+      edit((d) => ({ ...d, elements: [...d.elements, copy] }));
+      set({ selected: copy.id });
+    },
     select: (id) => set({ selected: id }),
 
     addFigure(sheet) {
       const d = get().doc, page = pageMm(d), inner = page.w - 2 * d.marginMm;
-      const el: FigureEl = { id: elId(), kind: 'figure', sheet, pen: 0, x: d.marginMm, y: d.marginMm, w: inner, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true };
+      const el: FigureEl = { id: elId(), kind: 'figure', sheet, pen: 0, x: d.marginMm, y: d.marginMm, w: inner, method: 'lineart', crop: [0, 0, 0, 0], cleanEdges: true, rot: 0 };
       edit((d) => ({ ...d, elements: [...d.elements, el] }));
       set({ selected: el.id });
     },
@@ -110,12 +151,12 @@ export const useStore = create<State>((set, get) => {
       const d = get().doc, page = pageMm(d), inner = page.w - 2 * d.marginMm;
       // below the last text so new blocks do not pile up on one spot (drag them wherever you like)
       const y = Math.min(page.h - d.marginMm - sizeMm, d.marginMm + d.elements.length * 14);
-      const el: TextEl = { id: elId(), kind: 'text', label, text, pen: 0, x: d.marginMm, y, w: inner, sizeMm };
+      const el: TextEl = { id: elId(), kind: 'text', label, text, pen: 0, x: d.marginMm, y, w: inner, sizeMm, align: 'left', rot: 0 };
       edit((d) => ({ ...d, elements: [...d.elements, el] }));
       set({ selected: el.id });
     },
 
-    updateEl: (id, change) => edit((d) => ({ ...d, elements: d.elements.map((e) => (e.id === id ? ({ ...e, ...change } as El) : e)) })),
+    updateEl: (id, change) => edit((d) => ({ ...d, elements: d.elements.map((e) => (e.id === id ? ({ ...e, ...change } as El) : e)) }), `el:${id}:${Object.keys(change).sort().join(',')}`),
     removeEl(id) { edit((d) => ({ ...d, elements: d.elements.filter((e) => e.id !== id) })); if (get().selected === id) set({ selected: null }); },
     moveEl: (id, dir) => edit((d) => {
       const i = d.elements.findIndex((e) => e.id === id), j = i + dir;
@@ -125,7 +166,7 @@ export const useStore = create<State>((set, get) => {
       return { ...d, elements: els };
     }),
 
-    setPen: (i, change) => edit((d) => ({ ...d, pens: d.pens.map((p, k) => (k === i ? { ...p, ...change } : p)) })),
+    setPen: (i, change) => edit((d) => ({ ...d, pens: d.pens.map((p, k) => (k === i ? { ...p, ...change } : p)) }), `pen:${i}:${Object.keys(change).sort().join(',')}`),
     addPen: () => edit((d) => (d.pens.length >= 8 ? d : { ...d, pens: [...d.pens, newPen(d.pens.length + 1)] })),
     removePen: (i) => edit((d) => (d.pens.length <= 1 ? d : { ...d, pens: d.pens.filter((_, k) => k !== i), elements: d.elements.map((e) => ({ ...e, pen: e.pen === i ? 0 : e.pen > i ? e.pen - 1 : e.pen })) })),
   };

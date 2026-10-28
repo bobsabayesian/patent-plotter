@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { PAPERS, pageMm, type El, type FigureEl, type TextEl } from './doc';
-import { buildScene } from './layout';
+import { PAPERS, pageMm, type El, type FigureEl, type Rot, type TextEl } from './doc';
+import { alignTo, fitInside, type Align, type Box } from './geometry';
+import { buildScene, placeEl } from './layout';
 import { Preview } from './Preview';
 import { PEN_TYPES, penType, nearestTip } from './scene/pens';
 import { cleanCode } from './session';
 import { useStore } from './store';
+import type { Vectorized } from './vectorize/client';
 import type { SearchResult } from '../worker/search.ts';
 import { sceneToSvg } from './svg';
 import { useVectors } from './useVectors';
@@ -16,6 +18,29 @@ export function App() {
   const { doc, patent } = s;
   const vec = useVectors(doc, patent);
   useEffect(() => { void s.boot(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [zoom, setZoom] = useState(1);
+  const [snap, setSnap] = useState(true);
+  const zoomBy = (f: number) => setZoom((z) => Math.min(5, Math.max(0.5, +(z * f).toFixed(3))));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable]')) return;
+      const st = useStore.getState();
+      const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+      if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) st.redo(); else st.undo(); return; }
+      if (mod && key === 'y') { e.preventDefault(); st.redo(); return; }
+      const el = st.doc.elements.find((x) => x.id === st.selected);
+      if (!el) return;
+      if (mod && key === 'd') { e.preventDefault(); st.duplicateEl(el.id); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); st.removeEl(el.id); return; }
+      if (e.key === 'Escape') { st.select(null); return; }
+      const step = e.shiftKey ? 10 : 1;
+      const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      if (move) { e.preventDefault(); st.updateEl(el.id, { x: +(el.x + move[0]!).toFixed(1), y: +(el.y + move[1]!).toFixed(1) }); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const exportSvg = () => {
     const scene = buildScene(doc, vec.vecs);
@@ -49,7 +74,17 @@ export function App() {
       <main className="stage">
         {s.busy && <div className="toast">{s.busy}</div>}
         {s.error && <div className="toast bad" role="alert">{s.error} <button onClick={() => useStore.setState({ error: null })}>Dismiss</button></div>}
-        <Preview doc={doc} vec={vec} />
+        <div className="bar">
+          <button onClick={s.undo} disabled={!s.past.length} title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+          <button onClick={s.redo} disabled={!s.future.length} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+          <span className="sep" />
+          <button onClick={() => zoomBy(1 / 1.25)} disabled={zoom <= 0.5} aria-label="Zoom out">−</button>
+          <button className="zoom" onClick={() => setZoom(1)} title="Fit the page in the window">{zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`}</button>
+          <button onClick={() => zoomBy(1.25)} disabled={zoom >= 5} aria-label="Zoom in">+</button>
+          <span className="sep" />
+          <label className="check" title="Snap to margins, the page middle and other things; hold Alt to place freely"><input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap</label>
+        </div>
+        <Preview doc={doc} vec={vec} zoom={zoom} snap={snap} />
       </main>
     </div>
   );
@@ -193,7 +228,7 @@ function Elements({ vec }: { vec: ReturnType<typeof useVectors> }) {
           <li key={e.id}><button className={e.id === selected ? 'on' : ''} onClick={() => select(e.id === selected ? null : e.id)}><i style={{ background: doc.pens[e.pen]?.color }} />{name(e)}</button></li>
         ))}
       </ul>
-      {el && <Editor key={el.id} el={el} err={vec.errors.get(el.id)} />}
+      {el && <Editor key={el.id} el={el} err={vec.errors.get(el.id)} vecs={vec.vecs} />}
     </section>
   );
 }
@@ -202,9 +237,17 @@ function Num({ label, value, onChange, step = 1, min = 0 }: { label: string; val
   return <label>{label}<input type="number" step={step} min={min} value={+value.toFixed(2)} onChange={(e) => { const v = +e.target.value; if (Number.isFinite(v)) onChange(v); }} /></label>;
 }
 
-function Editor({ el, err }: { el: El; err?: string }) {
-  const { doc, updateEl, removeEl, moveEl } = useStore();
+const ALIGNS: { how: Align; glyph: string; label: string }[] = [
+  { how: 'left', glyph: '⇤', label: 'Align to left margin' }, { how: 'center', glyph: '↔', label: 'Centre across the page' }, { how: 'right', glyph: '⇥', label: 'Align to right margin' },
+  { how: 'top', glyph: '⤒', label: 'Align to top margin' }, { how: 'middle', glyph: '↕', label: 'Centre down the page' }, { how: 'bottom', glyph: '⤓', label: 'Align to bottom margin' },
+];
+
+function Editor({ el, err, vecs }: { el: El; err?: string; vecs: ReadonlyMap<string, Vectorized> }) {
+  const { doc, updateEl, removeEl, moveEl, duplicateEl } = useStore();
   const page = pageMm(doc);
+  const inner: Box = [doc.marginMm, doc.marginMm, page.w - 2 * doc.marginMm, page.h - 2 * doc.marginMm];
+  const box = placeEl(el, vecs).box;
+  const turn = (by: number) => updateEl(el.id, { rot: ((((el.rot + by) % 4) + 4) % 4) as Rot });
   return (
     <div className="editor">
       <div className="row">
@@ -219,9 +262,23 @@ function Editor({ el, err }: { el: El; err?: string }) {
         <Num label="Y mm" value={el.y} onChange={(y) => updateEl(el.id, { y })} />
         <Num label="Width mm" value={el.w} min={5} onChange={(w) => updateEl(el.id, { w })} />
       </div>
+      <div className="tools" role="group" aria-label="Align">
+        <span className="lab">Align to the margins</span>
+        {ALIGNS.map((a) => <button key={a.how} title={a.label} aria-label={a.label} onClick={() => updateEl(el.id, alignTo(box, inner, a.how))}>{a.glyph}</button>)}
+        <button title="Centre on the page" onClick={() => updateEl(el.id, { ...alignTo(box, inner, 'center'), ...alignTo(box, inner, 'middle') })}>Centre</button>
+        {el.kind === 'figure' && <button title="Largest size that fits inside the margins, centred" onClick={() => updateEl(el.id, fitInside(box, inner))}>Fit page</button>}
+      </div>
+      <div className="tools" role="group" aria-label="Turn">
+        <span className="lab">Turn {el.rot ? `(${el.rot * 90}° clockwise)` : ''}</span>
+        <button title="Turn a quarter anticlockwise" aria-label="Turn anticlockwise" onClick={() => turn(-1)}>↺</button>
+        <button title="Turn a quarter clockwise" aria-label="Turn clockwise" onClick={() => turn(1)}>↻</button>
+        <button title="Turn upside down" onClick={() => turn(2)}>180°</button>
+        <button title="Back upright" onClick={() => updateEl(el.id, { rot: 0 })} disabled={!el.rot}>Upright</button>
+      </div>
       {el.kind === 'text' ? <TextFields el={el} /> : <FigureFields el={el} err={err} />}
       <div className="row">
         <button onClick={() => updateEl(el.id, { x: doc.marginMm, w: page.w - 2 * doc.marginMm })}>Fit width</button>
+        <button onClick={() => duplicateEl(el.id)} title="Duplicate (Ctrl+D)">Duplicate</button>
         <button onClick={() => moveEl(el.id, -1)} aria-label="Move earlier in the list">↑</button>
         <button onClick={() => moveEl(el.id, 1)} aria-label="Move later in the list">↓</button>
         <button className="danger" onClick={() => removeEl(el.id)}>Remove</button>
@@ -235,6 +292,10 @@ function TextFields({ el }: { el: TextEl }) {
   return (
     <>
       <textarea rows={4} value={el.text} onChange={(e) => updateEl(el.id, { text: e.target.value })} aria-label="Text" />
+      <div className="tools" role="group" aria-label="Text alignment">
+        <span className="lab">Text alignment</span>
+        {(['left', 'center', 'right'] as const).map((a) => <button key={a} className={el.align === a ? 'on' : ''} onClick={() => updateEl(el.id, { align: a })}>{a[0]!.toUpperCase() + a.slice(1)}</button>)}
+      </div>
       <Num label="Letter height mm" value={el.sizeMm} step={0.2} min={1} onChange={(sizeMm) => updateEl(el.id, { sizeMm: Math.max(1, sizeMm) })} />
       <p className="hint">The stroke font draws capitals as lowercase.</p>
     </>
