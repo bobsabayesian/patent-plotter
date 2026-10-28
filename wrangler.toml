@@ -1,0 +1,17 @@
+name = "patent-plotter"
+main = "worker/index.ts"
+compatibility_date = "2025-01-01"
+
+# serve from patents.bobsabayesian.io: wrangler creates the DNS record and certificate on deploy (a zone on this account)
+routes = [{ pattern = "patents.bobsabayesian.io", custom_domain = true }]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+# everything is kept under the patent-plotter/ prefix: sessions, cached patent records, cached drawing images
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "project-files"

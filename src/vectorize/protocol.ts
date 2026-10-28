@@ -1,0 +1,14 @@
+import type { XY } from '../vector/simplify';
+
+export type Method = 'lineart' | 'edges';
+
+export interface VectorizeRequest {
+  id: number;
+  url: string;
+  method: Method;
+  /** fractions of the sheet to trim off: top, right, bottom, left */
+  crop: [number, number, number, number];
+}
+export type VectorizeResponse =
+  | { id: number; ok: true; lines: XY[][]; width: number; height: number }
+  | { id: number; ok: false; error: string };
