@@ -104,6 +104,12 @@ describe('patent api', () => {
     expect(r!.status).toBe(404);
     expect((await handleApi(new Request('http://x/api/patent/hello'), store))!.status).toBe(400);
   });
+  it('says the source refused, rather than "no such patent", when it is blocked', async () => {
+    const { store } = memory();
+    const r = await handleApi(new Request('http://x/api/patent/US7654321B2'), store, async () => new Response('unusual traffic', { status: 503 }));
+    expect(r!.status).toBe(502);
+    expect(((await r!.json()) as { error: string }).error).toMatch(/refused.*503/);
+  });
   it('only proxies drawings from the patent image host', async () => {
     const { store } = memory();
     const doFetch = async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } });

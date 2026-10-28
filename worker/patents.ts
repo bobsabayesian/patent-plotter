@@ -98,14 +98,17 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
     if (hit) return new Response(hit.body, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=86400' } });
     // Google wants the kind code for some numbers and not others: as given, without it, then the usual ones
     const bare = id.replace(/[A-Z]\d?$/, '');
+    let refused = 0;
     for (const tryId of new Set([id, bare, `${bare}A`, `${bare}B2`, `${bare}B1`])) {
       const r = await doFetch(`https://patents.google.com/patent/${tryId}/en`, { headers: UA });
-      if (!r.ok) continue;
+      if (!r.ok) { if (r.status !== 404) refused = r.status; continue; }
       const rec = parsePatentPage(await r.text(), id);
       if (!rec.title && !rec.drawings.length) continue;
       await store.put(key, new TextEncoder().encode(JSON.stringify(rec)).buffer as ArrayBuffer, 'application/json');
       return json(200, rec, 'public, max-age=86400');
     }
+    // a refusal is not "no such patent": say which, so a block does not look like a typo
+    if (refused) return json(502, { error: `Google Patents refused the request (${refused}), so ${id} could not be looked up` });
     return json(404, { error: `no patent found for ${id}` });
   }
 
