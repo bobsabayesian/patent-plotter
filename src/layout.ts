@@ -1,6 +1,6 @@
 import type { Doc, El, FigureEl, TextEl } from './doc';
 import { pageMm } from './doc';
-import { layoutText } from './hatch/strokefont';
+import { layoutCased } from './hatch/extraglyphs';
 import { prepareText } from './text';
 import type { Layer, Line, Scene } from './scene/types';
 import type { XY } from './vector/simplify';
@@ -9,8 +9,8 @@ import type { Vectorized } from './vectorize/client';
 /** In the stroke font, tall letters are 6 units high and a line of text takes 9. */
 const CAP_UNITS = 6, LINE_UNITS = 9.5;
 
-const wordWidth = (w: string) => layoutText(w).width;
-const spaceWidth = () => layoutText('i i').width - layoutText('ii').width;
+const wordWidth = (w: string) => layoutCased(w).width;
+const spaceWidth = () => layoutCased('i i').width - layoutCased('ii').width;
 
 /** Break text into lines no wider than `maxUnits` (design units); a paragraph break is a blank line. */
 export function wrap(text: string, maxUnits: number): string[] {
@@ -52,7 +52,7 @@ export function placeText(el: TextEl): Placed {
   const lines: Line[] = [];
   rows.forEach((row, i) => {
     const base = (CAP_UNITS + i * LINE_UNITS) * s;
-    const laid = layoutText(row);
+    const laid = layoutCased(row);
     const free = el.w - laid.width * s;
     const x0 = el.align === 'center' ? free / 2 : el.align === 'right' ? free : 0;
     for (const g of laid.glyphs) for (const stroke of g.strokes) lines.push(stroke.map(([gx, gy]): XY => [x0 + (g.x + gx) * s, base - gy * s]));

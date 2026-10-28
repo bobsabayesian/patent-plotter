@@ -313,7 +313,6 @@ function TextFields({ el }: { el: TextEl }) {
         {(['left', 'center', 'right'] as const).map((a) => <button key={a} className={el.align === a ? 'on' : ''} onClick={() => updateEl(el.id, { align: a })}>{a[0]!.toUpperCase() + a.slice(1)}</button>)}
       </div>
       <Num label="Letter height mm" value={el.sizeMm} step={0.2} min={1} onChange={(sizeMm) => updateEl(el.id, { sizeMm: Math.max(1, sizeMm) })} />
-      <p className="hint">The stroke font draws capitals as lowercase.</p>
     </>
   );
 }
