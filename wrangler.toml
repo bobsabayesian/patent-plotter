@@ -20,3 +20,10 @@ bucket_name = "project-files"
 # (relay/README.md). The key is a secret: `npx wrangler secret put RELAY_KEY`
 [vars]
 RELAY_URL = "https://patents-relay.bobsabayesian.io"
+
+# each visitor may make 12 lookups a minute that go out to Google (answers kept in the bucket do not count), so one
+# visitor cannot get the home connection behind the relay refused by Google
+[[ratelimits]]
+name = "LOOKUP_LIMITER"
+namespace_id = "7301"
+simple = { limit = 12, period = 60 }

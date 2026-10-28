@@ -25,6 +25,23 @@ describe('relay target check', () => {
   });
 });
 
+describe('relay load', () => {
+  it('says busy past a short queue instead of piling up calls to Google', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const server = createServer(createRelay({ key: KEY, gapMs: 0, maxWaiting: 2, fetchUpstream: (async () => { await gate; return new Response('ok'); }) as typeof fetch }));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const pending = [get(base, page), get(base, page)];
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await get(base, page)).status).toBe(503);
+    release();
+    expect((await Promise.all(pending)).map((r) => r.status)).toEqual([200, 200]);
+    expect((await get(base, page)).status).toBe(200); // the queue drains
+    await new Promise((r) => server.close(r));
+  });
+});
+
 describe('relay', () => {
   it('refuses to start without a real key', () => {
     expect(() => createRelay({ key: '' })).toThrow();

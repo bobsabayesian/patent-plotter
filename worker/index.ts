@@ -13,6 +13,8 @@ interface Env {
   /** where the Google Patents relay answers, and the key it wants (a secret): see relay/README.md */
   RELAY_URL?: string;
   RELAY_KEY?: string;
+  /** per-visitor limit on lookups that go out to Google (see wrangler.toml) */
+  LOOKUP_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 }
 
 export default {
@@ -21,6 +23,6 @@ export default {
       get: async (key) => { const o = await env.FILES.get(key); return o ? { body: await o.arrayBuffer(), type: o.httpMetadata?.contentType ?? 'application/octet-stream' } : null; },
       put: async (key, body, contentType) => { await env.FILES.put(key, body, { httpMetadata: { contentType } }); },
     };
-    return (await handleApi(req, store, relayFetcher(env.RELAY_URL, env.RELAY_KEY))) ?? env.ASSETS.fetch(req);
+    return (await handleApi(req, store, relayFetcher(env.RELAY_URL, env.RELAY_KEY), async () => !env.LOOKUP_LIMITER || (await env.LOOKUP_LIMITER.limit({ key: req.headers.get('cf-connecting-ip') ?? 'unknown' })).success)) ?? env.ASSETS.fetch(req);
   },
 };

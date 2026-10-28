@@ -207,3 +207,21 @@ describe('search keeping and failure', () => {
     expect(((await r!.json()) as { error: string }).error).toMatch(/could not reach/);
   });
 });
+
+describe('per-visitor limit', () => {
+  const never = async () => false;
+  const feed = JSON.stringify({ results: { cluster: [{ result: [{ patent: { title: 'T', publication_number: 'US1A' } }] }] } });
+  it('stops lookups that would go out to Google, but not answers already kept', async () => {
+    const { store } = memory();
+    let asked = 0;
+    const doFetch = async () => { asked++; return new Response(feed); };
+    const blocked = await handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch, never);
+    expect(blocked!.status).toBe(429);
+    expect(asked).toBe(0);
+    expect((await handleApi(new Request('http://x/api/patent/US7654321B2'), store, doFetch, never))!.status).toBe(429);
+    expect(asked).toBe(0);
+    await handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch); // allowed once, so it is kept
+    expect((await handleApi(new Request('http://x/api/search?q=telephone'), store, doFetch, never))!.status).toBe(200);
+    expect(asked).toBe(1);
+  });
+});

@@ -100,7 +100,11 @@ async function hash(s: string): Promise<string> {
  *   GET /api/patent/<number>   -> a PatentRecord (cached in the bucket)
  *   GET /api/img?u=<image url> -> the drawing (only from the patent image host; cached in the bucket)
  */
-export async function handlePatents(req: Request, store: Store, doFetch: Fetcher = fetch): Promise<Response | null> {
+/** Says whether this visitor may make another lookup that goes out to Google (answers from the bucket never ask). */
+export type Allow = () => Promise<boolean>;
+export const TOO_MANY = { error: 'that is a lot of lookups at once; wait a minute and try again' };
+
+export async function handlePatents(req: Request, store: Store, doFetch: Fetcher = fetch, allow: Allow = async () => true): Promise<Response | null> {
   const url = new URL(req.url);
   if (req.method !== 'GET') return /^\/api\/(patent|img)\b/.test(url.pathname) ? json(405, { error: 'GET only' }) : null;
 
@@ -113,6 +117,7 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
     if (hit) return new Response(hit.body, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=86400' } });
     // Google wants the kind code for some numbers and not others: as given, without it, then the usual ones
     const bare = id.replace(/[A-Z]\d?$/, '');
+    if (!(await allow())) return json(429, TOO_MANY);
     let refused = 0;
     for (const tryId of new Set([id, bare, `${bare}A`, `${bare}B2`, `${bare}B1`])) {
       const r = await safeFetch(doFetch, `https://patents.google.com/patent/${tryId}/en`, { headers: UA });

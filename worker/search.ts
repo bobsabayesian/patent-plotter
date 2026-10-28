@@ -2,7 +2,7 @@
  * Searching US patents, historic ones included (Google Patents reaches back to 1790; its text is OCR for the old ones, so
  * titles can be rough). Goes through the same JSON feed the Google Patents page itself uses; there is no official API.
  */
-import { decode, IMAGE_HOST, safeFetch, type Fetcher } from './patents.ts';
+import { decode, IMAGE_HOST, safeFetch, TOO_MANY, type Allow, type Fetcher } from './patents.ts';
 import { PREFIX, type Store } from './store.ts';
 
 export interface SearchHit {
@@ -77,7 +77,7 @@ async function hash(s: string): Promise<string> {
 }
 
 /** GET /api/search?q=&from=&to=&sort=old|new&page=  ->  SearchResult  (kept in the bucket; see FRESH_MS) */
-export async function handleSearch(req: Request, store: Store, doFetch: Fetcher = fetch, now = Date.now()): Promise<Response | null> {
+export async function handleSearch(req: Request, store: Store, doFetch: Fetcher = fetch, allow: Allow = async () => true, now = Date.now()): Promise<Response | null> {
   const url = new URL(req.url);
   if (url.pathname !== '/api/search') return null;
   if (req.method !== 'GET') return json(405, { error: 'GET only' });
@@ -91,6 +91,7 @@ export async function handleSearch(req: Request, store: Store, doFetch: Fetcher 
   try { if (kept) old = JSON.parse(new TextDecoder().decode(kept.body)); } catch { /* a damaged entry is looked up again */ }
   if (old && now - old.cachedAt < FRESH_MS) return json(200, old.result);
 
+  if (!(await allow())) return old ? json(200, old.result) : json(429, TOO_MANY);
   const r = await safeFetch(doFetch, `https://patents.google.com/xhr/query?url=${encodeURIComponent(built.inner)}&exp=`, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; patent-plotter)' } });
   let result: SearchResult | null = null;
   if (r.ok) { try { result = parseSearch(await r.json(), page); } catch { /* unreadable: treated as a failure below */ } }
