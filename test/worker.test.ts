@@ -225,3 +225,32 @@ describe('per-visitor limit', () => {
     expect(asked).toBe(1);
   });
 });
+
+describe('when the relay says Google is limiting it', () => {
+  const blocked = async () => new Response('{"error":"google is limiting this connection"}', { status: 503, headers: { 'x-relay-blocked': '1' } });
+  it('tells the visitor what is going on, for a search and for a patent', async () => {
+    const { store } = memory();
+    const s = await handleApi(new Request('http://x/api/search?q=telephone'), store, blocked);
+    expect(s!.status).toBe(503);
+    expect(((await s!.json()) as { error: string }).error).toMatch(/limiting the relay.*already loaded still work/);
+    const p = await handleApi(new Request('http://x/api/patent/US7654321B2'), store, blocked);
+    expect(p!.status).toBe(503);
+    expect(((await p!.json()) as { error: string }).error).toMatch(/limiting the relay/);
+  });
+  it('still serves a search it kept, while blocked', async () => {
+    const { m, store } = memory();
+    const feed = JSON.stringify({ results: { cluster: [{ result: [{ patent: { title: 'Kept', publication_number: 'US1A' } }] }] } });
+    await handleApi(new Request('http://x/api/search?q=telephone'), store, async () => new Response(feed));
+    const [key, val] = [...m.entries()][0]!;
+    m.set(key, { ...val, body: new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(val.body)), cachedAt: 0 })).buffer as ArrayBuffer });
+    const r = await handleApi(new Request('http://x/api/search?q=telephone'), store, blocked);
+    expect(r!.status).toBe(200);
+    expect(((await r!.json()) as { hits: { title: string }[] }).hits[0]!.title).toBe('Kept');
+  });
+  it('does not mistake a plain 503 for the relay being blocked', async () => {
+    const { store } = memory();
+    const r = await handleApi(new Request('http://x/api/search?q=telephone'), store, async () => new Response('', { status: 503 }));
+    expect(r!.status).toBe(502);
+    expect(((await r!.json()) as { error: string }).error).toMatch(/said 503/);
+  });
+});

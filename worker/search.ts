@@ -2,7 +2,7 @@
  * Searching US patents, historic ones included (Google Patents reaches back to 1790; its text is OCR for the old ones, so
  * titles can be rough). Goes through the same JSON feed the Google Patents page itself uses; there is no official API.
  */
-import { decode, IMAGE_HOST, safeFetch, TOO_MANY, type Allow, type Fetcher } from './patents.ts';
+import { BLOCKED, decode, IMAGE_HOST, isBlocked, safeFetch, TOO_MANY, type Allow, type Fetcher } from './patents.ts';
 import { PREFIX, type Store } from './store.ts';
 
 export interface SearchHit {
@@ -100,5 +100,6 @@ export async function handleSearch(req: Request, store: Store, doFetch: Fetcher 
     return json(200, result);
   }
   if (old) return json(200, old.result); // the source is down: an old answer beats none
+  if (isBlocked(r)) return json(503, BLOCKED);
   return json(502, { error: r.status === 599 ? 'could not reach the patent source; try again in a moment' : `patent search said ${r.status}; try again in a moment` });
 }

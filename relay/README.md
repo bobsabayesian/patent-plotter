@@ -21,3 +21,11 @@ Set-up, once:
 5. `npm run deploy`
 
 Check: `curl https://patents-relay.bobsabayesian.io/health` answers `{"ok":true}`, then search on the site.
+
+## If searches fail with "limiting the relay's connection"
+
+Google has started refusing this home connection (its "Sorry..." page). It is usually temporary. The relay notices, stops
+asking for 20 minutes (then 40, 80, up to 2 hours if Google keeps refusing), and the site says so; patents and searches
+already loaded keep working from R2. `curl localhost:8788/health` shows `blockedForSec`. Do not hammer it with
+test searches meanwhile, as that can make the block last longer. To apply a change to the relay:
+`systemctl --user restart patent-relay`.

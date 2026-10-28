@@ -102,6 +102,9 @@ async function hash(s: string): Promise<string> {
  */
 /** Says whether this visitor may make another lookup that goes out to Google (answers from the bucket never ask). */
 export type Allow = () => Promise<boolean>;
+/** The relay says Google is refusing its connection (it marks the answer): say that, and that saved things still work. */
+export const BLOCKED = { error: 'Google Patents is limiting the relay\'s connection right now, which usually clears within a few hours. Patents and searches you have already loaded still work.' };
+export const isBlocked = (r: Response) => r.headers.get('x-relay-blocked') === '1';
 export const TOO_MANY = { error: 'that is a lot of lookups at once; wait a minute and try again' };
 
 export async function handlePatents(req: Request, store: Store, doFetch: Fetcher = fetch, allow: Allow = async () => true): Promise<Response | null> {
@@ -118,16 +121,17 @@ export async function handlePatents(req: Request, store: Store, doFetch: Fetcher
     // Google wants the kind code for some numbers and not others: as given, without it, then the usual ones
     const bare = id.replace(/[A-Z]\d?$/, '');
     if (!(await allow())) return json(429, TOO_MANY);
-    let refused = 0;
+    let refused = 0, blocked = false;
     for (const tryId of new Set([id, bare, `${bare}A`, `${bare}B2`, `${bare}B1`])) {
       const r = await safeFetch(doFetch, `https://patents.google.com/patent/${tryId}/en`, { headers: UA });
-      if (!r.ok) { if (r.status !== 404) refused = r.status; continue; }
+      if (!r.ok) { if (r.status !== 404) refused = r.status; if (isBlocked(r)) blocked = true; continue; }
       const rec = parsePatentPage(await r.text(), id);
       if (!rec.title && !rec.drawings.length) continue;
       await store.put(key, new TextEncoder().encode(JSON.stringify(rec)).buffer as ArrayBuffer, 'application/json');
       return json(200, rec, 'public, max-age=86400');
     }
     // a refusal is not "no such patent": say which, so a block does not look like a typo
+    if (blocked) return json(503, BLOCKED);
     if (refused) return json(502, { error: refused === 599 ? `could not reach the patent source to look up ${id}` : `Google Patents refused the request (${refused}), so ${id} could not be looked up` });
     return json(404, { error: `no patent found for ${id}` });
   }

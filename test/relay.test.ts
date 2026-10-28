@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { checkTarget, createRelay } from '../relay/relay.mjs';
+import { checkTarget, createRelay, refusedByGoogle } from '../relay/relay.mjs';
 
 const KEY = 'k'.repeat(24);
 
@@ -66,7 +66,7 @@ describe('relay', () => {
     expect(r.seen[0]!.ua).toMatch(/Chrome/);
     await r.close();
   });
-  it('refuses other hosts even with the key, and passes Google refusals on as they are', async () => {
+  it('refuses other hosts even with the key, and reports a Google refusal as a 503', async () => {
     const r = await up(() => new Response('Sorry...', { status: 503 }));
     expect((await get(r.base, 'https://evil.example/patent/US1A/en')).status).toBe(400);
     expect((await get(r.base, page)).status).toBe(503);
@@ -78,6 +78,76 @@ describe('relay', () => {
     const res = await get(r.base, page);
     expect(res.status).toBe(502);
     expect(((await res.json()) as { error: string }).error).toMatch(/could not reach Google/);
+    await r.close();
+  });
+});
+
+describe('relay back-off when Google refuses it', () => {
+  const sorry = () => new Response('<html><title>Sorry...</title>We\'re sorry... unusual traffic from your computer network</html>', { status: 503, headers: { 'content-type': 'text/html' } });
+  const MIN = 60_000;
+
+  /** The relay with a clock the test moves and a Google it controls. */
+  async function rig() {
+    let clock = 1_000_000, mode: 'sorry' | 'ok' | 'throttle' = 'sorry', asked = 0;
+    const server = createServer(createRelay({
+      key: KEY, gapMs: 0, now: () => clock, coolMs: 20 * MIN, maxCoolMs: 2 * 60 * MIN,
+      fetchUpstream: (async () => { asked++; return mode === 'sorry' ? sorry() : mode === 'throttle' ? new Response('slow down', { status: 429 }) : new Response('<html>fine</html>', { status: 200 }); }) as typeof fetch,
+    }));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    return {
+      base, asked: () => asked, tick: (ms: number) => { clock += ms; }, set: (m: typeof mode) => { mode = m; },
+      health: async () => (await fetch(`${base}/health`)).json() as Promise<{ ok: boolean; blockedForSec: number }>,
+      close: () => new Promise((r) => server.close(r)),
+    };
+  }
+
+  it('recognises Google refusing it', () => {
+    expect(refusedByGoogle(503, Buffer.from('<title>Sorry...</title>'))).toBe(true);
+    expect(refusedByGoogle(503, Buffer.from('our servers are unusual traffic'))).toBe(true);
+    expect(refusedByGoogle(429, Buffer.from(''))).toBe(true);
+    expect(refusedByGoogle(503, Buffer.from('<html>maintenance</html>'))).toBe(false); // a plain 503 is not a block
+    expect(refusedByGoogle(200, Buffer.from('Sorry, no results'))).toBe(false);
+    expect(refusedByGoogle(404, Buffer.from('Sorry'))).toBe(false);
+  });
+  it('stops asking Google once it is refused, and marks the answer so the Worker can say why', async () => {
+    const r = await rig();
+    const first = await get(r.base, page);
+    expect(first.status).toBe(503);
+    expect(first.headers.get('x-relay-blocked')).toBe('1');
+    expect(Number(first.headers.get('retry-after'))).toBe(20 * 60);
+    expect(await first.text()).not.toContain('unusual traffic'); // not Google's page
+    for (let i = 0; i < 5; i++) expect((await get(r.base, page)).headers.get('x-relay-blocked')).toBe('1');
+    expect(r.asked()).toBe(1); // five more tries, none reached Google
+    expect((await r.health()).blockedForSec).toBeGreaterThan(0);
+    await r.close();
+  });
+  it('tries again once the cool-off is over, and goes back to normal when Google answers', async () => {
+    const r = await rig();
+    await get(r.base, page);
+    r.tick(19 * MIN);
+    await get(r.base, page);
+    expect(r.asked()).toBe(1); // not yet
+    r.tick(2 * MIN);
+    r.set('ok');
+    const again = await get(r.base, page);
+    expect(again.status).toBe(200);
+    expect(await again.text()).toContain('fine');
+    expect(r.asked()).toBe(2);
+    expect((await r.health()).blockedForSec).toBe(0);
+    await r.close();
+  });
+  it('waits twice as long each time Google refuses again, up to a limit, and starts over after a success', async () => {
+    const r = await rig();
+    const wait = async () => Number((await get(r.base, page)).headers.get('retry-after'));
+    expect(await wait()).toBe(20 * 60);
+    r.tick(21 * MIN); expect(await wait()).toBe(40 * 60);
+    r.tick(41 * MIN); expect(await wait()).toBe(80 * 60);
+    r.tick(81 * MIN); expect(await wait()).toBe(120 * 60); // capped at two hours
+    r.tick(121 * MIN); r.set('ok');
+    expect((await get(r.base, page)).status).toBe(200);
+    r.set('throttle');
+    expect(await wait()).toBe(20 * 60); // back to the first step
     await r.close();
   });
 });
